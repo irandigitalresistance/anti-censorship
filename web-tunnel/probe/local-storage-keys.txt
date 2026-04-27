@@ -1,0 +1,28 @@
+Captured from web.bale.ai with logged-in test account on 2026-04-21.
+
+localStorage keys:
+  _migrated_to_async_storage
+  user                              → full profile (id, name, phone, ext, privacyBarMode, accessHash)
+  @firebase/performance/config
+  @firebase/performance/configexpire
+  should_enable_sentry
+  uuid                              → device/app uuid
+  app.web.language
+
+sessionStorage keys:
+  isStartPage
+
+Test account identifiers (for later integration testing — do NOT publish):
+  user.id       = 1517881924   (matches `sub` in the LiveKit JWT the user provided)
+  user.name     = "محمد حسن"
+  user.phone    = "989393412132"
+  user.accessHash = "-7942762178337385736"
+  uuid          = "43a37d5e-be4f-4a10-8a60-3388b149984c"
+
+Auth bearer token was NOT present in localStorage. It likely lives in:
+  - IndexedDB `kv` store (next probe step), or
+  - in-memory only, reconstructed on each page load from a refresh token in `db` somewhere, or
+  - Service Worker storage (FetchEvent handling)
+
+For the server sidecar, we'll use aiobale's own phone+OTP login flow rather than
+trying to reuse a browser-session's token — more reliable across auth refresh.

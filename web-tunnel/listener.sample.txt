@@ -1,0 +1,10 @@
+=== listener 2026-04-23T19:21:13.8454585+02:00 ===
+
+LocalAddress LocalPort RemoteAddress RemotePort    State OwningProcess
+------------ --------- ------------- ----------    ----- -------------
+127.0.0.1        18081 127.0.0.1          60194 TimeWait             0
+127.0.0.1        18081 127.0.0.1          60205 TimeWait             0
+127.0.0.1        18081 0.0.0.0                0   Listen        114580
+
+
+

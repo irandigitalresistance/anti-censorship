@@ -1,0 +1,45 @@
+appId: ai.anthropic.webtunnel
+productName: Web Tunnel
+directories:
+  output: ../release
+files:
+  - "dist/**/*"
+  - "src/renderer/**/*"
+  - "src/main/preload.cjs"
+  - "package.json"
+  # Pull in the LiveKit native SDK explicitly. We mark it `--external` from
+  # esbuild so the bundled main.js does a runtime `import('@livekit/rtc-node')`,
+  # which means electron-builder won't auto-detect it via static analysis and
+  # we have to enumerate it here.
+  - "node_modules/@livekit/rtc-node/**/*"
+  - "node_modules/@livekit/rtc-ffi-bindings/**/*"
+  - "node_modules/@livekit/rtc-ffi-bindings-*/**/*"
+  - "node_modules/@livekit/mutex/**/*"
+  - "node_modules/@livekit/protocol/**/*"
+  - "node_modules/@livekit/typed-emitter/**/*"
+  - "node_modules/livekit-client/**/*"
+  - "node_modules/qrcode/**/*"
+  - "node_modules/dijkstrajs/**/*"
+  - "node_modules/encode-utf8/**/*"
+  - "node_modules/pngjs/**/*"
+extraResources:
+  - from: "resources/sing-box"
+    to: "sing-box"
+    filter: ["**/*", "!.gitignore"]
+asarUnpack:
+  - "dist/main/main.cjs"
+  - "src/main/preload.cjs"
+  # Native module: @livekit/rtc-node ships a `.node` binding via the
+  # @livekit/rtc-ffi-bindings* family. Both the JS layers AND the platform
+  # binding have to live outside asar, otherwise the dynamic require() that
+  # rtc-ffi-bindings does to dlopen the `.node` file fails.
+  - "node_modules/@livekit/**/*"
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  artifactName: "WebTunnel-Client.${ext}"
+  signAndEditExecutable: false
+portable:
+  artifactName: "WebTunnel-Client.${ext}"
