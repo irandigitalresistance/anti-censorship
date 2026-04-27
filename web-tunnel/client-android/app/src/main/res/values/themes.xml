@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+  <style name="Theme.WebTunnelMobile" parent="Theme.Material3.Dark.NoActionBar">
+    <item name="colorPrimary">@color/wt_accent</item>
+    <item name="colorOnPrimary">@color/wt_black_green</item>
+    <item name="colorSecondary">@color/wt_accent</item>
+    <item name="android:statusBarColor">@color/wt_bg</item>
+    <item name="android:navigationBarColor">@color/wt_bg</item>
+    <item name="android:windowBackground">@color/wt_bg</item>
+    <item name="materialCardViewStyle">@style/Widget.Material3.CardView.Filled</item>
+    <item name="android:textColor">@color/wt_text</item>
+    <item name="android:colorBackground">@color/wt_bg</item>
+  </style>
+
+  <style name="Widget.WebTunnel.Button.Primary" parent="Widget.Material3.Button">
+    <item name="backgroundTint">@color/wt_accent</item>
+    <item name="android:textColor">@color/wt_black_green</item>
+  </style>
+
+  <style name="Widget.WebTunnel.Button.Danger" parent="Widget.Material3.Button.OutlinedButton">
+    <item name="strokeColor">@color/wt_err</item>
+    <item name="android:textColor">@color/wt_err</item>
+  </style>
+
+  <style name="Widget.WebTunnel.Button.OutlineSmall" parent="Widget.Material3.Button.OutlinedButton">
+    <item name="android:textColor">@color/wt_muted</item>
+    <item name="strokeColor">@color/wt_border</item>
+  </style>
+</resources>

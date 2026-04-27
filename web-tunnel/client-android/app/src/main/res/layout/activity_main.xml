@@ -1,0 +1,790 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.coordinatorlayout.widget.CoordinatorLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/wt_bg">
+
+  <com.google.android.material.appbar.AppBarLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:background="@color/wt_bg"
+      app:elevation="0dp">
+
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="@color/wt_bg"
+        android:minHeight="?attr/actionBarSize"
+        app:contentInsetStartWithNavigation="0dp"
+        app:title="@string/header_title"
+        app:titleCentered="false"
+        app:titleTextColor="@color/wt_text" />
+
+    <TextView
+        android:id="@+id/me"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="20dp"
+        android:paddingBottom="8dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="@string/not_logged_in"
+        android:textColor="@color/wt_muted"
+        android:textSize="12sp" />
+  </com.google.android.material.appbar.AppBarLayout>
+
+  <ScrollView
+      android:layout_width="match_parent"
+      android:layout_height="match_parent"
+      android:fillViewport="true"
+      app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="8dp">
+
+      <com.google.android.material.card.MaterialCardView
+          android:id="@+id/errCard"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginBottom="12dp"
+          app:cardBackgroundColor="@color/wt_panel"
+          app:cardCornerRadius="12dp"
+          app:strokeColor="@color/wt_err"
+          app:strokeWidth="1dp"
+          android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+          <TextView
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:text="@string/error_title"
+              android:textAllCaps="true"
+              android:textColor="@color/wt_muted"
+              android:textSize="11sp" />
+
+          <TextView
+              android:id="@+id/err"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="8dp"
+              android:textColor="@color/wt_err"
+              android:textSize="13sp" />
+        </LinearLayout>
+      </com.google.android.material.card.MaterialCardView>
+
+      <com.google.android.material.card.MaterialCardView
+          android:id="@+id/phoneStep"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginBottom="12dp"
+          app:cardBackgroundColor="@color/wt_panel"
+          app:cardCornerRadius="12dp"
+          app:strokeColor="@color/wt_border"
+          app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+          <TextView
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:text="@string/login_title"
+              android:textColor="@color/wt_text"
+              android:textSize="18sp"
+              android:textStyle="bold" />
+
+          <com.google.android.material.textfield.TextInputLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:hint="@string/phone_hint"
+              app:boxBackgroundMode="outline"
+              app:boxStrokeColor="@color/wt_border"
+              app:hintTextColor="@color/wt_muted">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/phone"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="phone"
+                android:textColor="@color/wt_text" />
+          </com.google.android.material.textfield.TextInputLayout>
+
+          <com.google.android.material.button.MaterialButton
+              android:id="@+id/sendCode"
+              style="@style/Widget.WebTunnel.Button.Primary"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:text="@string/send_code" />
+
+          <TextView
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="10dp"
+              android:text="@string/phone_sub"
+              android:textColor="@color/wt_muted"
+              android:textSize="12sp" />
+        </LinearLayout>
+      </com.google.android.material.card.MaterialCardView>
+
+      <com.google.android.material.card.MaterialCardView
+          android:id="@+id/codeStep"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginBottom="12dp"
+          android:visibility="gone"
+          app:cardBackgroundColor="@color/wt_panel"
+          app:cardCornerRadius="12dp"
+          app:strokeColor="@color/wt_border"
+          app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+          <LinearLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:gravity="center_vertical"
+              android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/backFromCode"
+                style="@style/Widget.WebTunnel.Button.OutlineSmall"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/back" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:textColor="@color/wt_muted"
+                android:textSize="12sp"
+                android:text="@string/code_sent_to" />
+
+            <TextView
+                android:id="@+id/codePhoneDisplay"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="—"
+                android:textColor="@color/wt_text"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/resendCode"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:text="@string/resend_code"
+                android:textColor="@color/wt_accent"
+                android:textSize="12sp" />
+          </LinearLayout>
+
+          <TextView
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:text="@string/code_title"
+              android:textColor="@color/wt_text"
+              android:textSize="18sp"
+              android:textStyle="bold" />
+
+          <com.google.android.material.textfield.TextInputLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:hint="@string/code_label"
+              app:boxBackgroundMode="outline"
+              app:boxStrokeColor="@color/wt_border"
+              app:hintTextColor="@color/wt_muted">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/code"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="number"
+                android:textColor="@color/wt_text" />
+          </com.google.android.material.textfield.TextInputLayout>
+
+          <com.google.android.material.button.MaterialButton
+              android:id="@+id/verifyCode"
+              style="@style/Widget.WebTunnel.Button.Primary"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:text="@string/verify" />
+        </LinearLayout>
+      </com.google.android.material.card.MaterialCardView>
+
+      <com.google.android.material.card.MaterialCardView
+          android:id="@+id/passwordStep"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginBottom="12dp"
+          android:visibility="gone"
+          app:cardBackgroundColor="@color/wt_panel"
+          app:cardCornerRadius="12dp"
+          app:strokeColor="@color/wt_border"
+          app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+          <LinearLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:gravity="center_vertical"
+              android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/backFromPassword"
+                style="@style/Widget.WebTunnel.Button.OutlineSmall"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/back" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:text="@string/two_factor_enabled"
+                android:textColor="@color/wt_muted"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/pwPhoneDisplay"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="—"
+                android:textColor="@color/wt_text"
+                android:textSize="12sp" />
+          </LinearLayout>
+
+          <TextView
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:text="@string/password_title"
+              android:textColor="@color/wt_text"
+              android:textSize="18sp"
+              android:textStyle="bold" />
+
+          <com.google.android.material.textfield.TextInputLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:hint="@string/password_label"
+              app:boxBackgroundMode="outline"
+              app:boxStrokeColor="@color/wt_border"
+              app:hintTextColor="@color/wt_muted">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/password"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textPassword"
+                android:textColor="@color/wt_text" />
+          </com.google.android.material.textfield.TextInputLayout>
+
+          <com.google.android.material.button.MaterialButton
+              android:id="@+id/verifyPassword"
+              style="@style/Widget.WebTunnel.Button.Primary"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:text="@string/verify" />
+        </LinearLayout>
+      </com.google.android.material.card.MaterialCardView>
+
+      <com.google.android.material.card.MaterialCardView
+          android:id="@+id/picker"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginBottom="12dp"
+          android:visibility="gone"
+          app:cardBackgroundColor="@color/wt_panel"
+          app:cardCornerRadius="12dp"
+          app:strokeColor="@color/wt_border"
+          app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+          <TextView
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:text="@string/start_tunnel_title"
+              android:textColor="@color/wt_text"
+              android:textSize="18sp"
+              android:textStyle="bold" />
+
+          <!-- Carrier is hard-coded WebRTC on Android; the radio group is gone
+               for v0.2 because the chat carrier is desktop-only. -->
+          <RadioButton
+              android:id="@+id/carrierWebrtc"
+              android:layout_width="0dp"
+              android:layout_height="0dp"
+              android:checked="true"
+              android:visibility="gone" />
+          <RadioButton
+              android:id="@+id/carrierChat"
+              android:layout_width="0dp"
+              android:layout_height="0dp"
+              android:visibility="gone" />
+
+          <TextView
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:text="@string/peer_picker_label"
+              android:textAllCaps="true"
+              android:textColor="@color/wt_muted"
+              android:textSize="11sp" />
+
+          <Spinner
+              android:id="@+id/chatSelect"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="6dp"
+              android:background="@color/wt_panel"
+              android:padding="12dp" />
+
+          <com.google.android.material.textfield.TextInputLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:hint="@string/socks_port_label"
+              app:boxBackgroundMode="outline"
+              app:boxStrokeColor="@color/wt_border"
+              app:hintTextColor="@color/wt_muted">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/socksPort"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="number"
+                android:text="1080"
+                android:textColor="@color/wt_text" />
+          </com.google.android.material.textfield.TextInputLayout>
+
+          <com.google.android.material.button.MaterialButton
+              android:id="@+id/start"
+              style="@style/Widget.WebTunnel.Button.Primary"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="20dp"
+              android:text="@string/start_tunnel" />
+        </LinearLayout>
+      </com.google.android.material.card.MaterialCardView>
+
+      <com.google.android.material.card.MaterialCardView
+          android:id="@+id/connectingCard"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginBottom="12dp"
+          android:visibility="gone"
+          app:cardBackgroundColor="@color/wt_panel"
+          app:cardCornerRadius="12dp"
+          app:strokeColor="@color/wt_border"
+          app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+          <LinearLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:gravity="center_vertical"
+              android:orientation="horizontal">
+
+            <ProgressBar
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:indeterminate="true"
+                android:indeterminateTint="@color/wt_accent" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:text="@string/connecting_title"
+                android:textColor="@color/wt_text"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+          </LinearLayout>
+
+          <TextView
+              android:id="@+id/connectingEvents"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="12dp"
+              android:fontFamily="monospace"
+              android:textColor="@color/wt_muted"
+              android:textSize="11sp" />
+        </LinearLayout>
+      </com.google.android.material.card.MaterialCardView>
+
+      <com.google.android.material.card.MaterialCardView
+          android:id="@+id/connected"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginBottom="12dp"
+          android:visibility="gone"
+          app:cardBackgroundColor="@color/wt_panel"
+          app:cardCornerRadius="12dp"
+          app:strokeColor="@color/wt_border"
+          app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+          <LinearLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:gravity="center_vertical"
+              android:orientation="horizontal">
+
+            <View
+                android:layout_width="10dp"
+                android:layout_height="10dp"
+                android:background="@drawable/status_dot_active" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="@string/tunnel_active_title"
+                android:textColor="@color/wt_text"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+          </LinearLayout>
+
+          <TextView
+              android:id="@+id/kServer"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="12dp"
+              android:textColor="@color/wt_text"
+              android:textSize="15sp"
+              android:textStyle="bold" />
+
+          <TextView
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:text="@string/server_label"
+              android:textAllCaps="true"
+              android:textColor="@color/wt_muted"
+              android:textSize="10sp" />
+
+          <!-- KPI grid: 2x2 stat tiles. -->
+          <LinearLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:orientation="horizontal"
+              android:weightSum="2">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+              <TextView
+                  android:id="@+id/kUp"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:textColor="@color/wt_text"
+                  android:textSize="20sp"
+                  android:textStyle="bold" />
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="2dp"
+                  android:text="@string/uploaded_label"
+                  android:textAllCaps="true"
+                  android:textColor="@color/wt_muted"
+                  android:textSize="10sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+              <TextView
+                  android:id="@+id/kDown"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:textColor="@color/wt_text"
+                  android:textSize="20sp"
+                  android:textStyle="bold" />
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="2dp"
+                  android:text="@string/downloaded_label"
+                  android:textAllCaps="true"
+                  android:textColor="@color/wt_muted"
+                  android:textSize="10sp" />
+            </LinearLayout>
+          </LinearLayout>
+
+          <LinearLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="14dp"
+              android:orientation="horizontal"
+              android:weightSum="2">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+              <TextView
+                  android:id="@+id/kStreams"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:textColor="@color/wt_text"
+                  android:textSize="20sp"
+                  android:textStyle="bold" />
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="2dp"
+                  android:text="@string/streams_label"
+                  android:textAllCaps="true"
+                  android:textColor="@color/wt_muted"
+                  android:textSize="10sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+              <TextView
+                  android:id="@+id/kSince"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:textColor="@color/wt_text"
+                  android:textSize="20sp"
+                  android:textStyle="bold" />
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="2dp"
+                  android:text="@string/uptime_label"
+                  android:textAllCaps="true"
+                  android:textColor="@color/wt_muted"
+                  android:textSize="10sp" />
+            </LinearLayout>
+          </LinearLayout>
+
+          <TextView
+              android:id="@+id/kSocks"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:textColor="@color/wt_text"
+              android:textSize="14sp"
+              android:textStyle="bold" />
+          <TextView
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:text="@string/socks_label"
+              android:textAllCaps="true"
+              android:textColor="@color/wt_muted"
+              android:textSize="10sp" />
+
+          <com.google.android.material.button.MaterialButton
+              android:id="@+id/stop"
+              style="@style/Widget.WebTunnel.Button.Danger"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="20dp"
+              android:text="@string/stop_tunnel" />
+
+          <LinearLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="10dp"
+              android:orientation="horizontal"
+              android:weightSum="2">
+
+            <FrameLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="6dp">
+              <com.google.android.material.button.MaterialButton
+                  android:id="@+id/testSpeed"
+                  style="@style/Widget.WebTunnel.Button.OutlineSmall"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="@string/test_speed" />
+              <ProgressBar
+                  android:id="@+id/testSpeedSpinner"
+                  android:layout_width="20dp"
+                  android:layout_height="20dp"
+                  android:layout_gravity="center"
+                  android:indeterminate="true"
+                  android:indeterminateTint="@color/wt_accent"
+                  android:visibility="gone" />
+            </FrameLayout>
+
+            <FrameLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="6dp">
+              <com.google.android.material.button.MaterialButton
+                  android:id="@+id/sendLogs"
+                  style="@style/Widget.WebTunnel.Button.OutlineSmall"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="@string/send_logs" />
+              <ProgressBar
+                  android:id="@+id/sendLogsSpinner"
+                  android:layout_width="20dp"
+                  android:layout_height="20dp"
+                  android:layout_gravity="center"
+                  android:indeterminate="true"
+                  android:indeterminateTint="@color/wt_accent"
+                  android:visibility="gone" />
+            </FrameLayout>
+          </LinearLayout>
+
+          <LinearLayout
+              android:id="@+id/speedResult"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="14dp"
+              android:orientation="horizontal"
+              android:visibility="gone"
+              android:weightSum="3">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+              <TextView
+                  android:id="@+id/speedLatency"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:textColor="@color/wt_accent"
+                  android:textSize="14sp"
+                  android:textStyle="bold" />
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/speed_latency_label"
+                  android:textAllCaps="true"
+                  android:textColor="@color/wt_muted"
+                  android:textSize="10sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+              <TextView
+                  android:id="@+id/speedUpload"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:textColor="@color/wt_accent"
+                  android:textSize="14sp"
+                  android:textStyle="bold" />
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/speed_upload_label"
+                  android:textAllCaps="true"
+                  android:textColor="@color/wt_muted"
+                  android:textSize="10sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+              <TextView
+                  android:id="@+id/speedDownload"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:textColor="@color/wt_accent"
+                  android:textSize="14sp"
+                  android:textStyle="bold" />
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="@string/speed_download_label"
+                  android:textAllCaps="true"
+                  android:textColor="@color/wt_muted"
+                  android:textSize="10sp" />
+            </LinearLayout>
+          </LinearLayout>
+
+          <LinearLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="14dp"
+              android:orientation="vertical">
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/wt_muted"
+                android:textSize="11sp"
+                android:text="@string/socks_hint_prefix" />
+            <TextView
+                android:id="@+id/socksHint"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:fontFamily="monospace"
+                android:text="1080"
+                android:textColor="@color/wt_text"
+                android:textSize="12sp" />
+          </LinearLayout>
+        </LinearLayout>
+      </com.google.android.material.card.MaterialCardView>
+    </LinearLayout>
+  </ScrollView>
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "types": ["node"],
+    "paths": {
+      "@webtunnel/shared": ["../shared/src/index.ts"],
+      "@webtunnel/server": ["../server/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*", "test/**/*"]
+}

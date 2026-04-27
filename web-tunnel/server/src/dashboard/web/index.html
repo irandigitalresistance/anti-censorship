@@ -1,0 +1,291 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>web-tunnel v0.2 dashboard</title>
+    <style>
+      :root {
+        --bg: #0e0f12;
+        --panel: #161922;
+        --text: #e6e8ee;
+        --muted: #8a90a1;
+        --accent: #4cd4a3;
+        --warn: #f4a056;
+        --border: #232736;
+        --danger: #e45656;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg); color: var(--text); }
+      header { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 16px; }
+      header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .02em; }
+      header .status { color: var(--muted); font-size: 12px; }
+      header .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); margin-right: 6px; vertical-align: middle; }
+      header .status.live .dot { background: var(--accent); }
+      main { padding: 16px 20px; display: grid; gap: 12px; }
+      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; }
+      .card h2 { margin: 0 0 8px; font-size: 12px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+      table { border-collapse: collapse; width: 100%; }
+      th { text-align: left; font-weight: 500; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+      td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+      tr:last-child td { border-bottom: none; }
+      .muted { color: var(--muted); }
+      .num { font-variant-numeric: tabular-nums; }
+      code { background: var(--bg); padding: 2px 4px; border-radius: 3px; font-size: 11px; }
+      .kpi { display: flex; gap: 22px; }
+      .kpi .item strong { display: block; font-size: 20px; color: var(--text); font-weight: 500; }
+      .kpi .item span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+      .link { background: transparent; border: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; padding: 0; }
+      .danger-link { color: var(--danger); }
+      .stack { display: flex; flex-direction: column; gap: 4px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>web-tunnel v0.2</h1>
+      <div id="status" class="status"><span class="dot"></span>connecting...</div>
+    </header>
+    <main>
+      <div class="card">
+        <h2>Overview</h2>
+        <div class="kpi">
+          <div class="item"><strong id="kpi-tunnels">0</strong><span>Active tunnels</span></div>
+          <div class="item"><strong id="kpi-streams">0</strong><span>Open streams</span></div>
+          <div class="item"><strong id="kpi-rate">0 B/s</strong><span>Aggregate throughput</span></div>
+          <div class="item"><strong id="kpi-total">0 B</strong><span>Total transferred</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Active tunnels</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Label</th>
+              <th>Client</th>
+              <th>Protocol</th>
+              <th>Streams</th>
+              <th>Transfer</th>
+              <th>Opened</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="tunnels"></tbody>
+        </table>
+        <div id="empty" class="muted" style="padding: 14px 8px; display:none;">No active tunnels.</div>
+      </div>
+      <div class="card">
+        <h2>Uploaded Client Logs</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Source</th>
+              <th>File</th>
+              <th>Size</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="logs"></tbody>
+        </table>
+        <div id="logs-empty" class="muted" style="padding: 14px 8px; display:none;">No uploaded logs yet.</div>
+      </div>
+    </main>
+    <script>
+      const tunnelsBody = document.getElementById('tunnels');
+      const logsBody = document.getElementById('logs');
+      const emptyBanner = document.getElementById('empty');
+      const logsEmptyBanner = document.getElementById('logs-empty');
+      const kpiTunnels = document.getElementById('kpi-tunnels');
+      const kpiStreams = document.getElementById('kpi-streams');
+      const kpiRate = document.getElementById('kpi-rate');
+      const kpiTotal = document.getElementById('kpi-total');
+      const status = document.getElementById('status');
+
+      const tunnels = new Map();
+      const rates = new Map();
+      let logs = [];
+      let lifetime = { up: 0, down: 0 };
+
+      function fmtBytes(n) {
+        if (n < 1024) return n + ' B';
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+        if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(2) + ' MB';
+        return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+      }
+      function fmtRate(n) { return fmtBytes(n) + '/s'; }
+      function fmtRelTime(ts) {
+        const s = Math.floor((Date.now() - ts) / 1000);
+        if (s < 60) return s + 's';
+        if (s < 3600) return Math.floor(s / 60) + 'm' + (s % 60) + 's';
+        return Math.floor(s / 3600) + 'h' + Math.floor((s % 3600) / 60) + 'm';
+      }
+
+      async function fetchLogs() {
+        try {
+          const res = await fetch('/api/logs');
+          const json = await res.json();
+          logs = json.logs || [];
+          renderLogs();
+        } catch {
+          logs = [];
+          renderLogs();
+        }
+      }
+
+      async function terminateTunnel(id) {
+        await fetch('/api/tunnels/' + encodeURIComponent(id) + '/terminate', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ reason: 'terminated by dashboard operator' }),
+        });
+      }
+
+      function render() {
+        tunnelsBody.innerHTML = '';
+        let totalRate = 0;
+        const lifetimeBytes = (lifetime.up || 0) + (lifetime.down || 0);
+        let totalStreams = 0;
+        for (const [id, tunnel] of tunnels) {
+          const rate = rates.get(id) || 0;
+          totalRate += rate;
+          totalStreams += tunnel.streamsActive || 0;
+          const row = document.createElement('tr');
+          const action = tunnel.terminable
+            ? '<button class="link danger-link" data-terminate-id="' + id + '">Terminate</button>'
+            : '<span class="muted">n/a</span>';
+          const clientLabel = tunnel.clientType
+            ? ('[' + tunnel.clientType + ']' + (tunnel.clientVersion ? ' v' + tunnel.clientVersion : ''))
+            : '[unknown]';
+          row.innerHTML =
+            '<td><div class="stack"><span>' + (tunnel.label || '-') + '</span><span class="muted"><code>' + id.slice(0, 8) + '</code></span></div></td>' +
+            '<td><span>' + clientLabel + '</span></td>' +
+            '<td><div class="stack"><span>v' + (tunnel.protocolVersion ?? '?') + '</span><span class="muted">' + (tunnel.terminationState || 'idle') + '</span></div></td>' +
+            '<td class="num">' + tunnel.streamsActive + ' / ' + tunnel.streamsOpened + '</td>' +
+            '<td class="num"><div>' + fmtBytes((tunnel.bytesUp || 0) + (tunnel.bytesDown || 0)) + '</div><div class="muted">' + fmtRate(rate) + '</div></td>' +
+            '<td class="num">' + fmtRelTime(tunnel.openedAt) + '</td>' +
+            '<td>' + action + '</td>';
+          tunnelsBody.appendChild(row);
+        }
+        emptyBanner.style.display = tunnels.size === 0 ? 'block' : 'none';
+        kpiTunnels.textContent = tunnels.size.toString();
+        kpiStreams.textContent = totalStreams.toString();
+        kpiRate.textContent = fmtRate(totalRate);
+        kpiTotal.textContent = fmtBytes(lifetimeBytes);
+      }
+
+      function renderLogs() {
+        logsBody.innerHTML = '';
+        if (!logs.length) {
+          logsEmptyBanner.style.display = 'block';
+          return;
+        }
+        logsEmptyBanner.style.display = 'none';
+        for (const log of logs) {
+          const row = document.createElement('tr');
+          row.innerHTML =
+            '<td class="num">' + fmtRelTime(log.receivedAt) + ' ago</td>' +
+            '<td>' + (log.source || '-') + '</td>' +
+            '<td><code>' + (log.fileName || '-') + '</code></td>' +
+            '<td class="num">' + fmtBytes(log.size || 0) + '</td>' +
+            '<td><a class="link" href="/api/logs/' + encodeURIComponent(log.id) + '/download">Download</a> | ' +
+              '<button class="link" data-view-log-id="' + log.id + '">View</button></td>';
+          logsBody.appendChild(row);
+        }
+      }
+
+      function connect() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(proto + '//' + location.host + '/events');
+        ws.onopen = () => {
+          status.classList.add('live');
+          status.innerHTML = '<span class="dot"></span>live';
+        };
+        ws.onclose = () => {
+          status.classList.remove('live');
+          status.innerHTML = '<span class="dot"></span>disconnected - retrying...';
+          setTimeout(connect, 1000);
+        };
+        ws.onerror = () => ws.close();
+        ws.onmessage = (ev) => {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'snapshot') {
+            tunnels.clear();
+            rates.clear();
+            for (const tunnel of msg.tunnels || []) tunnels.set(tunnel.id, tunnel);
+            if (msg.lifetime) lifetime = msg.lifetime;
+            render();
+            return;
+          }
+          if (msg.type === 'tunnel-opened' || msg.type === 'tunnel-updated') {
+            tunnels.set(msg.tunnel.id, msg.tunnel);
+            render();
+            return;
+          }
+          if (msg.type === 'tunnel-closed') {
+            tunnels.delete(msg.tunnel.id);
+            rates.delete(msg.tunnel.id);
+            render();
+            return;
+          }
+          if (msg.type === 'stream-opened' || msg.type === 'stream-closed') {
+            const tunnel = tunnels.get(msg.tunnelId);
+            if (tunnel) {
+              if (msg.type === 'stream-opened') {
+                tunnel.streamsOpened = (tunnel.streamsOpened || 0) + 1;
+                tunnel.streamsActive = (tunnel.streamsActive || 0) + 1;
+              } else {
+                tunnel.streamsActive = Math.max(0, (tunnel.streamsActive || 0) - 1);
+              }
+            }
+            render();
+            return;
+          }
+          if (msg.type === 'metrics') {
+            for (const [id, metric] of Object.entries(msg.perTunnel || {})) {
+              const tunnel = tunnels.get(id);
+              if (!tunnel) continue;
+              const up = metric.bytesUpDelta || 0;
+              const down = metric.bytesDownDelta || 0;
+              tunnel.bytesUp = (tunnel.bytesUp || 0) + up;
+              tunnel.bytesDown = (tunnel.bytesDown || 0) + down;
+              tunnel.streamsActive = metric.streamsActive || 0;
+              rates.set(id, up + down);
+            }
+            if (msg.lifetimeBytesUp != null) {
+              lifetime = { up: msg.lifetimeBytesUp, down: msg.lifetimeBytesDown };
+            }
+            render();
+          }
+        };
+      }
+
+      tunnelsBody.addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const id = target.getAttribute('data-terminate-id');
+        if (!id) return;
+        if (!confirm('Terminate this tunnel?')) return;
+        await terminateTunnel(id);
+      });
+
+      logsBody.addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const id = target.getAttribute('data-view-log-id');
+        if (!id) return;
+        const res = await fetch('/api/logs/' + encodeURIComponent(id));
+        if (!res.ok) {
+          alert('Log not found');
+          return;
+        }
+        const json = await res.json();
+        alert(json.log?.body || '(empty)');
+      });
+
+      connect();
+      setInterval(render, 1000);
+      setInterval(fetchLogs, 2000);
+      fetchLogs();
+    </script>
+  </body>
+</html>

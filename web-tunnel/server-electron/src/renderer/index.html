@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline';" />
+    <title>Web Tunnel Server v0.2</title>
+    <style>
+      :root {
+        --bg: #0e0f12;
+        --panel: #161922;
+        --text: #e6e8ee;
+        --muted: #8a90a1;
+        --accent: #4cd4a3;
+        --warn: #f4a056;
+        --err: #e45656;
+        --border: #232736;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; font: 13px/1.45 ui-monospace, Menlo, monospace; background: var(--bg); color: var(--text); }
+      body { display: flex; flex-direction: column; }
+      header { padding: 12px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+      header h1 { margin: 0; font-size: 14px; font-weight: 600; }
+      header .me { color: var(--muted); font-size: 12px; margin-left: auto; }
+      header .btn { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 11px; }
+      main { flex: 1; padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; }
+      .card h2 { margin: 0 0 10px; font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+      label { display: block; margin: 6px 0 3px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+      input, button { font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; width: 100%; }
+      button { cursor: pointer; width: auto; padding: 8px 18px; }
+      button.primary { background: var(--accent); color: #08211a; border-color: var(--accent); font-weight: 500; }
+      button.danger { background: transparent; color: var(--err); border-color: var(--err); }
+      button.ghost { background: transparent; border-color: var(--border); color: var(--muted); }
+      button:disabled { opacity: .45; cursor: not-allowed; }
+      .link { background: transparent; border: 0; color: var(--accent); padding: 0; cursor: pointer; font: inherit; text-decoration: underline; }
+      .step-meta { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 11px; color: var(--muted); gap: 12px; }
+      .step-meta button { padding: 4px 10px; }
+      .row { display: flex; gap: 12px; align-items: flex-end; }
+      .row > * { flex: 1; }
+      .row > button { flex: 0 0 auto; }
+      .err { color: var(--err); font-size: 12px; padding: 8px 10px; background: rgba(228,86,86,0.08); border: 1px solid rgba(228,86,86,0.25); border-radius: 4px; }
+      .kpi { display: flex; gap: 22px; flex-wrap: wrap; }
+      .kpi .item strong { display: block; font-size: 20px; color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+      .kpi .item span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+      .muted { color: var(--muted); }
+      .step-sub { color: var(--muted); font-size: 11px; margin-top: 4px; }
+      code { background: var(--bg); padding: 2px 5px; border-radius: 3px; font-size: 11px; border: 1px solid var(--border); }
+      .section-title { margin: 16px 0 10px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+
+      /* Account accordion */
+      .account-group { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 10px; overflow: hidden; }
+      .account-header { background: rgba(35,39,54,0.6); padding: 10px 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+      .account-name { font-weight: 600; font-size: 13px; flex: 1; }
+      .account-badge { font-size: 11px; color: var(--muted); }
+      .account-metrics { display: flex; gap: 16px; font-size: 11px; }
+      .account-metrics .metric { display: flex; flex-direction: column; align-items: flex-end; }
+      .account-metrics .metric .val { color: var(--text); font-variant-numeric: tabular-nums; }
+      .account-metrics .metric .lbl { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+
+      /* Per-connection row inside accordion */
+      .conn-item { border-top: 1px solid var(--border); padding: 10px 14px; }
+      .conn-item:first-child { border-top: none; }
+      .conn-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+      .conn-label { font-size: 11px; color: var(--muted); flex: 1; }
+      .conn-stats { font-size: 11px; color: var(--muted); display: flex; gap: 10px; }
+      .conn-stats .val { color: var(--text); font-variant-numeric: tabular-nums; }
+      .conn-streams { margin-top: 4px; font-size: 11px; color: var(--muted); }
+      .conn-streams .stream { padding: 1px 0; }
+
+      /* Logs table */
+      table { width: 100%; border-collapse: collapse; }
+      th { text-align: left; font-weight: 500; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+      td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+      tr:last-child td { border-bottom: none; }
+      .num { font-variant-numeric: tabular-nums; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>web-tunnel server v0.2</h1>
+      <div id="me" class="me">not logged in</div>
+      <button id="open-log" class="btn" title="open debug log">Open log</button>
+      <button id="signout" class="btn" style="display:none;">Sign out</button>
+    </header>
+    <main>
+      <div id="err-card" class="card" style="display:none;">
+        <h2>Error</h2>
+        <div id="err" class="err" style="white-space:pre-wrap; font-family: ui-monospace, Menlo, monospace; user-select: text; max-height: 260px; overflow-y: auto;"></div>
+      </div>
+
+      <div id="phone-step" class="card" style="display:none;">
+        <h2>Log in with your phone number</h2>
+        <div class="row">
+          <div><label for="phone">Phone (international format, no +, e.g. 989123456789)</label>
+            <input id="phone" type="tel" autocomplete="off" placeholder="98..." /></div>
+          <button id="send-code" class="primary">Send code</button>
+        </div>
+      </div>
+
+      <div id="code-step" class="card" style="display:none;">
+        <div class="step-meta">
+          <button id="back-from-code" class="ghost">Back</button>
+          <span>Code sent to <code id="code-phone-display">-</code></span>
+          <button id="resend-code" class="link">Resend code</button>
+        </div>
+        <h2>Enter the code from the SMS</h2>
+        <div class="row">
+          <div><label for="code">Code</label>
+            <input id="code" type="text" inputmode="numeric" placeholder="123456" /></div>
+          <button id="verify-code" class="primary">Verify</button>
+        </div>
+      </div>
+
+      <div id="password-step" class="card" style="display:none;">
+        <div class="step-meta">
+          <button id="back-from-password" class="ghost">Back</button>
+          <span>2FA enabled on <code id="pw-phone-display">-</code></span>
+          <span></span>
+        </div>
+        <h2>Two-factor password</h2>
+        <div class="row">
+          <div><label for="password">Your Bale 2FA password</label>
+            <input id="password" type="password" /></div>
+          <button id="verify-password" class="primary">Verify</button>
+        </div>
+      </div>
+
+      <div id="picker" class="card" style="display:none;">
+        <h2>Start the server</h2>
+        <div class="row">
+          <button id="start" class="primary">Start</button>
+        </div>
+        <div class="step-sub" id="fingerprint" style="margin-top:8px;"></div>
+      </div>
+
+      <div id="running" class="card" style="display:none;">
+        <h2>Server running</h2>
+        <div class="kpi">
+          <div class="item"><strong id="k-tunnels">0</strong><span>Active tunnels</span></div>
+          <div class="item"><strong id="k-streams">0</strong><span>Active streams</span></div>
+          <div class="item"><strong id="k-up">0 B</strong><span>Up (active)</span></div>
+          <div class="item"><strong id="k-down">0 B</strong><span>Down (active)</span></div>
+          <div class="item"><strong id="k-total">0 B</strong><span>Total transferred</span></div>
+          <div class="item"><strong id="k-since">0s</strong><span>Uptime</span></div>
+        </div>
+        <div style="margin-top:12px;"><button id="stop" class="danger">Stop</button></div>
+      </div>
+
+      <!-- Users list — always visible after login. Shows every account that
+           has ever connected with persistent up/down/total counters. -->
+      <div id="users-card" class="card" style="display:none;">
+        <h2>Users</h2>
+        <div id="connections-list"></div>
+        <div id="connections-empty" class="step-sub">No users yet — start the server and have someone connect.</div>
+      </div>
+
+      <div id="logs-card" class="card" style="display:none;">
+        <h2>Client log uploads</h2>
+        <table id="logs-table" style="display:none;">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Source</th>
+              <th>File</th>
+              <th>Size</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="logs-body"></tbody>
+        </table>
+        <div id="logs-empty" class="step-sub">No client logs uploaded yet.</div>
+      </div>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let startedAt = null;
+      let busy = false;
+
+      function fmtBytes(n) {
+        if (n < 1024) return n + ' B';
+        if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+        if (n < 1073741824) return (n / 1048576).toFixed(2) + ' MB';
+        return (n / 1073741824).toFixed(2) + ' GB';
+      }
+      function fmtDuration(ms) {
+        const s = Math.floor(ms / 1000);
+        if (s < 60) return s + 's';
+        if (s < 3600) return Math.floor(s / 60) + 'm' + (s % 60) + 's';
+        return Math.floor(s / 3600) + 'h' + Math.floor((s % 3600) / 60) + 'm';
+      }
+      function esc(s) {
+        return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      }
+      function carrierLabel(value) {
+        if (value === 'webrtc') return 'WebRTC';
+        if (value === 'chat') return 'Chat';
+        if (value === 'ws') return 'WebSocket';
+        return value || 'Unknown';
+      }
+      function clientTypeLabel(type, version) {
+        const v = version ? ' v' + version : '';
+        if (type === 'windows') return '[Windows]' + v;
+        if (type === 'android') return '[Android]' + v;
+        if (type) return '[' + type + ']' + v;
+        return '[unknown client]';
+      }
+
+      function setBusy(value) {
+        busy = value;
+        ['send-code','verify-code','verify-password','resend-code','start','stop','signout']
+          .forEach((id) => { if ($(id)) $(id).disabled = !!value; });
+      }
+
+      function userLabelFor(user) {
+        if (user.name && user.name.trim()) return user.name.trim();
+        if (user.username && user.username.trim()) return '@' + user.username.trim();
+        return user.chatType + ' ' + user.chatId;
+      }
+      function userBadgeFor(user) {
+        const id = user.chatType + ' ' + user.chatId;
+        return user.username ? id + ' • @' + user.username : id;
+      }
+
+      /**
+       * Render the user list. Every user we've ever seen is shown — even with
+       * zero active connections. Active connections are nested under their
+       * owning user. Reset zeroes the cumulative bytes but keeps the user.
+       */
+      function renderUsers(users, connections) {
+        const list = $('connections-list');
+        const empty = $('connections-empty');
+        users = users || [];
+        connections = connections || [];
+        if (users.length === 0 && connections.length === 0) {
+          list.innerHTML = '';
+          empty.style.display = 'block';
+          return;
+        }
+        empty.style.display = 'none';
+        const connByPeer = new Map();
+        for (const c of connections) {
+          // Connections expose chatId/chatType inside conn? Not directly —
+          // they come from refreshConnectionDetails which doesn't include peer
+          // chatId. We instead match on userLabel (best-effort fallback) but
+          // the canonical source is the user.activeTunnelIds list.
+          // Group by id so we can look up by the user's activeTunnelIds.
+          connByPeer.set(c.id, c);
+        }
+        // Stable sort: users with active connections first, then by lastSeen.
+        const ordered = users.slice().sort((a, b) => {
+          if ((b.activeConnections > 0) !== (a.activeConnections > 0)) {
+            return (b.activeConnections > 0 ? 1 : 0) - (a.activeConnections > 0 ? 1 : 0);
+          }
+          return b.lastSeen - a.lastSeen;
+        });
+        list.innerHTML = ordered.map((user) => {
+          const userConns = (user.activeTunnelIds || [])
+            .map((id) => connByPeer.get(id))
+            .filter(Boolean);
+          const total = (user.bytesUp || 0) + (user.bytesDown || 0);
+          const idleSince = user.activeConnections === 0
+            ? 'idle for ' + fmtDuration(Date.now() - user.lastSeen)
+            : userConns.length + (userConns.length === 1 ? ' active connection' : ' active connections');
+          const connsHtml = userConns.map((conn) => {
+            const streamDetails = conn.streams && conn.streams.length
+              ? conn.streams.slice(0, 3).map((s) =>
+                  '<div class="stream">' + esc(s.target) + ' — up ' + fmtBytes(s.bytesUp) + ' | down ' + fmtBytes(s.bytesDown) + '</div>'
+                ).join('') +
+                (conn.streams.length > 3
+                  ? '<div class="stream">+' + (conn.streams.length - 3) + ' more streams</div>'
+                  : '')
+              : '';
+            const action = conn.terminable
+              ? '<button class="link terminate-btn" data-conn-id="' + esc(conn.id) + '" style="margin-left:8px;">Terminate</button>'
+              : '';
+            return (
+              '<div class="conn-item">' +
+                '<div class="conn-row">' +
+                  '<span class="conn-label">' +
+                    esc(clientTypeLabel(conn.clientType, conn.clientVersion)) + ' · ' +
+                    esc(carrierLabel(conn.carrier)) + ' · v' + esc(conn.protocolVersion ?? '?') +
+                    ' · ' + esc(conn.terminationState || 'active') +
+                    action +
+                  '</span>' +
+                  '<div class="conn-stats">' +
+                    '<span><span class="val">' + conn.streamsActive + '/' + conn.streamsOpened + '</span> streams</span>' +
+                    '<span>↑ <span class="val">' + fmtBytes(conn.bytesUp) + '</span></span>' +
+                    '<span>↓ <span class="val">' + fmtBytes(conn.bytesDown) + '</span></span>' +
+                    '<span><span class="val" data-opened-at="' + conn.openedAt + '">' + fmtDuration(Date.now() - conn.openedAt) + '</span></span>' +
+                  '</div>' +
+                '</div>' +
+                (streamDetails ? '<div class="conn-streams">' + streamDetails + '</div>' : '') +
+              '</div>'
+            );
+          }).join('') || '<div class="conn-item"><span class="muted" style="font-size:11px;">No active connections</span></div>';
+
+          return (
+            '<div class="account-group">' +
+              '<div class="account-header">' +
+                '<div>' +
+                  '<div class="account-name">' + esc(userLabelFor(user)) + '</div>' +
+                  '<div class="account-badge">' + esc(userBadgeFor(user)) + ' · ' + esc(idleSince) + '</div>' +
+                '</div>' +
+                '<div class="account-metrics">' +
+                  '<div class="metric"><span class="val">↑ ' + fmtBytes(user.bytesUp) + '</span><span class="lbl">Up</span></div>' +
+                  '<div class="metric"><span class="val">↓ ' + fmtBytes(user.bytesDown) + '</span><span class="lbl">Down</span></div>' +
+                  '<div class="metric"><span class="val">∑ ' + fmtBytes(total) + '</span><span class="lbl">Total</span></div>' +
+                  '<button class="link reset-user-btn" data-peer-key="' + esc(user.peerKey) + '" style="margin-left:8px; align-self:center;">Reset</button>' +
+                '</div>' +
+              '</div>' +
+              connsHtml +
+            '</div>'
+          );
+        }).join('');
+      }
+
+      function renderLogs(logs) {
+        const body = $('logs-body');
+        const table = $('logs-table');
+        const empty = $('logs-empty');
+        if (!logs || logs.length === 0) {
+          body.innerHTML = '';
+          table.style.display = 'none';
+          empty.style.display = 'block';
+          return;
+        }
+        table.style.display = 'table';
+        empty.style.display = 'none';
+        body.innerHTML = logs.map((log) => (
+          '<tr>' +
+            '<td class="num">' + fmtDuration(Date.now() - log.receivedAt) + ' ago</td>' +
+            '<td>' + esc(log.source) + '</td>' +
+            '<td><code>' + esc(log.fileName) + '</code></td>' +
+            '<td class="num">' + fmtBytes(log.size || 0) + '</td>' +
+            '<td><button class="link view-log-btn" data-log-id="' + esc(log.id) + '">View</button></td>' +
+          '</tr>'
+        )).join('');
+      }
+
+      function refreshAges() {
+        if (startedAt) $('k-since').textContent = fmtDuration(Date.now() - startedAt);
+        document.querySelectorAll('[data-opened-at]').forEach((el) => {
+          const openedAt = Number(el.getAttribute('data-opened-at'));
+          if (!Number.isFinite(openedAt)) return;
+          el.textContent = fmtDuration(Date.now() - openedAt);
+        });
+      }
+
+      function render(status) {
+        $('err-card').style.display = status.lastError ? 'block' : 'none';
+        $('err').textContent = status.lastError || '';
+        $('me').textContent = status.me ? ('logged in as ' + (status.me.name || 'user ' + status.me.id)) : 'not logged in';
+        $('signout').style.display = status.loginStage === 'ready' ? 'inline-block' : 'none';
+        $('fingerprint').textContent = status.serverFingerprint
+          ? ('Server key fingerprint: ' + status.serverFingerprint)
+          : '';
+
+        const show = (id, v) => { $(id).style.display = v ? 'block' : 'none'; };
+        show('phone-step', status.loginStage === 'unauthenticated');
+        show('code-step', status.loginStage === 'awaiting-code');
+        show('password-step', status.loginStage === 'awaiting-password');
+        show('picker', status.loginStage === 'ready' && !status.running);
+        show('running', status.running);
+        // Users + log uploads are always visible after login — operator can
+        // still inspect / reset users while the server is stopped.
+        show('users-card', status.loginStage === 'ready');
+        show('logs-card', status.loginStage === 'ready');
+
+        if (status.pendingPhone) {
+          $('code-phone-display').textContent = status.pendingPhone;
+          $('pw-phone-display').textContent = status.pendingPhone;
+          if (status.loginStage === 'unauthenticated' && !$('phone').value) $('phone').value = status.pendingPhone;
+        }
+
+        if (status.running) {
+          startedAt = status.startedAt;
+          $('k-tunnels').textContent = status.tunnelsActive;
+          $('k-streams').textContent = status.streamsActive;
+          $('k-up').textContent = fmtBytes(status.bytesUp);
+          $('k-down').textContent = fmtBytes(status.bytesDown);
+          $('k-total').textContent = fmtBytes((status.lifetimeBytesUp || 0) + (status.lifetimeBytesDown || 0));
+          $('k-since').textContent = fmtDuration(Date.now() - status.startedAt);
+          renderUsers(status.users || [], status.connections || []);
+          renderLogs(status.logs || []);
+        } else {
+          startedAt = null;
+          // Even when the server isn't running, keep showing the persistent
+          // user list so the operator can still inspect or reset accounts.
+          renderUsers(status.users || [], []);
+          renderLogs(status.logs || []);
+        }
+      }
+      setInterval(refreshAges, 1000);
+
+      $('send-code').addEventListener('click', async () => {
+        const p = $('phone').value.trim();
+        if (!p) return alert('Enter a phone number');
+        setBusy(true);
+        try { await window.wt.sendPhoneCode(p); } catch (e) { alert(e.message); }
+        setBusy(false);
+      });
+      $('phone').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('send-code').click(); });
+
+      $('verify-code').addEventListener('click', async () => {
+        const c = $('code').value.trim();
+        if (!c) return alert('Enter the code');
+        setBusy(true);
+        try { await window.wt.verifyCode(c); } catch (e) { alert(e.message); }
+        setBusy(false);
+      });
+      $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('verify-code').click(); });
+
+      $('verify-password').addEventListener('click', async () => {
+        const pw = $('password').value;
+        if (!pw) return alert('Enter 2FA password');
+        setBusy(true);
+        try { await window.wt.verifyPassword(pw); } catch (e) { alert(e.message); }
+        setBusy(false);
+      });
+      $('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('verify-password').click(); });
+
+      $('back-from-code').addEventListener('click', async () => { $('code').value=''; await window.wt.backToPhone(); });
+      $('back-from-password').addEventListener('click', async () => { $('password').value=''; await window.wt.backToCode(); });
+      $('resend-code').addEventListener('click', async () => {
+        setBusy(true);
+        try { await window.wt.resendCode(); alert('New code sent.'); } catch (e) { alert(e.message); }
+        setBusy(false);
+      });
+
+      $('signout').addEventListener('click', async () => {
+        if (!confirm('Sign out and forget the saved session?')) return;
+        await window.wt.signOut();
+      });
+
+      $('start').addEventListener('click', async () => {
+        setBusy(true);
+        try { await window.wt.startServer(''); } catch (e) { alert(e.message); }
+        setBusy(false);
+      });
+      $('stop').addEventListener('click', async () => { await window.wt.stopServer(); });
+      $('open-log').addEventListener('click', async () => { try { await window.wt.openLog(); } catch (e) { alert('openLog failed: ' + e.message); } });
+
+      $('connections-list').addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const connId = target.getAttribute('data-conn-id');
+        if (connId) {
+          if (!confirm('Terminate this connection now?')) return;
+          try { await window.wt.terminateConnection(connId, 'terminated by dashboard operator'); }
+          catch (e) { alert(e.message); }
+          return;
+        }
+        const peerKey = target.getAttribute('data-peer-key');
+        if (peerKey) {
+          if (!confirm('Reset this user\'s up/down counters to zero?\nActive connections are not interrupted.')) return;
+          try { await window.wt.resetUser(peerKey); }
+          catch (e) { alert(e.message); }
+        }
+      });
+
+      $('logs-body').addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const id = target.getAttribute('data-log-id');
+        if (!id) return;
+        try {
+          const body = await window.wt.getLog(id);
+          alert(body || 'Log not found');
+        } catch (e) {
+          alert(e.message);
+        }
+      });
+
+      window.wt.onStatusChange(render);
+      (async () => render(await window.wt.getStatus()))();
+    </script>
+  </body>
+</html>

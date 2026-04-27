@@ -1,0 +1,208 @@
+# ---------- Dependencies ----------
+node_modules/
+.pnp
+.pnp.js
+.yarn/cache
+.yarn/install-state.gz
+
+# ---------- Build output ----------
+dist/
+build/
+out/
+.next/
+.nuxt/
+.svelte-kit/
+.turbo/
+.cache/
+.parcel-cache/
+.vite/
+.rollup.cache/
+.tsbuildinfo
+*.tsbuildinfo
+
+# ---------- Release artifacts ----------
+release/
+releases/
+*-unpacked/
+win-unpacked/
+mac/
+mac-arm64/
+linux-unpacked/
+
+# Installer / native binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.app
+*.dmg
+*.pkg
+*.msi
+*.msix
+*.appx
+*.deb
+*.rpm
+*.snap
+*.AppImage
+*.apk
+*.aab
+*.ipa
+*.aar
+*.pak
+*.bin
+*.dat
+
+# Allow source-controlled binaries that are intentionally tracked
+!**/src/**/*.bin
+!**/src/**/*.dat
+
+# ---------- Playwright / browser test tooling ----------
+.playwright-mcp/
+playwright-report/
+playwright/.cache/
+test-results/
+.last-run.json
+e2e-results/
+
+# ---------- Logs & debug output ----------
+*.log
+*.log.*
+*.err.log
+*.out.log
+*.err.txt
+*.out.txt
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# ---------- Images / screenshots / captures ----------
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.bmp
+*.tiff
+*.ico
+# Allow source-tracked images (icons, app assets, docs)
+!**/src/**/*.png
+!**/src/**/*.jpg
+!**/src/**/*.jpeg
+!**/src/**/*.gif
+!**/src/**/*.webp
+!**/src/**/*.svg
+!**/src/**/*.ico
+!**/res/**/*.png
+!**/res/**/*.jpg
+!**/res/**/*.webp
+!**/assets/**/*.png
+!**/assets/**/*.jpg
+!**/assets/**/*.svg
+!**/public/**/*
+!**/docs/**/*.png
+!**/docs/**/*.jpg
+
+# Common screen-dump filenames
+window_dump.xml
+*-screen.png
+*-screenshot.png
+screenshots/
+
+# ---------- Archives & vendored bundles ----------
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# Scratch / vendored extraction directories
+tmp/
+tmp_*/
+tmp_*.zip
+tmp_*.txt
+
+# ---------- Local data / runtime state ----------
+*.sqlite
+*.sqlite-journal
+*.sqlite3
+*.db
+**/server/data/
+**/client/data/
+probe/captures/
+captures/
+
+# ---------- Environment & secrets ----------
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.crt
+*.p12
+
+# ---------- Coverage & test ----------
+coverage/
+.nyc_output/
+.vitest/
+*.lcov
+
+# ---------- Android / Gradle ----------
+.gradle/
+gradle-app.setting
+local.properties
+**/build/
+**/app/build/
+*.keystore
+*.jks
+captures/
+
+# Vendored Gradle distribution (the wrapper at gradle/ should still be tracked)
+gradle-[0-9]*/
+gradle-[0-9]*.[0-9]*/
+*.jar
+!gradle/wrapper/**/*.jar
+!**/gradle-wrapper.jar
+
+# ---------- Android logcat / device dumps ----------
+android-*.txt
+*-logcat-*.txt
+*-logcat.txt
+logcat-*.txt
+
+# ---------- Editor / IDE ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# Claude local settings (project-specific Claude harness state)
+**/.claude/settings.local.json
+
+# ---------- Python ----------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+pip-wheel-metadata/
+
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/

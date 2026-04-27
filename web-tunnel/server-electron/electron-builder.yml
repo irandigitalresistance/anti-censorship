@@ -1,0 +1,36 @@
+appId: ai.anthropic.webtunnel.server
+productName: Web Tunnel Server
+directories:
+  output: ../release
+files:
+  - "dist/**/*"
+  - "src/renderer/**/*"
+  - "src/main/preload.cjs"
+  - "package.json"
+  - "node_modules/@livekit/rtc-node/**/*"
+  - "node_modules/@livekit/rtc-ffi-bindings/**/*"
+  - "node_modules/@livekit/rtc-ffi-bindings-*/**/*"
+  - "node_modules/@livekit/mutex/**/*"
+  - "node_modules/@livekit/protocol/**/*"
+  - "node_modules/@livekit/typed-emitter/**/*"
+  - "node_modules/livekit-client/**/*"
+asarUnpack:
+  - "dist/main/main.cjs"
+  - "src/main/preload.cjs"
+  - "node_modules/@livekit/**/*"
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  artifactName: "WebTunnel-Server.${ext}"
+  signAndEditExecutable: false
+mac:
+  target:
+    - target: zip
+      arch:
+        - x64
+  artifactName: "WebTunnel-Server-mac.${ext}"
+  identity: null
+portable:
+  artifactName: "WebTunnel-Server.${ext}"

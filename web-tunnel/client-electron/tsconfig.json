@@ -1,0 +1,16 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "paths": {
+      "@webtunnel/shared": ["../shared/src/index.ts"],
+      "@webtunnel/server": ["../server/src/index.ts"],
+      "@webtunnel/client": ["../client/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/main/preload.cjs", "src/renderer/**/*"]
+}

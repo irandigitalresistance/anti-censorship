@@ -1,0 +1,16 @@
+[project]
+name = "bale-sidecar"
+version = "0.0.1"
+description = "aiobale-backed sidecar exposing line-delimited JSON IPC for the web-tunnel Node server"
+requires-python = ">=3.10"
+dependencies = [
+  "aiobale==0.1.5",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bale_sidecar*"]
