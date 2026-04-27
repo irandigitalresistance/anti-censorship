@@ -1,93 +1,218 @@
 # anti-censorship
 
+A circumvention tunnel that smuggles arbitrary TCP/UDP traffic through messages
+exchanged on the **Bale** messenger (an Iranian chat app that is not blocked
+inside the censored region). A user inside the firewall runs a small client
+app, the operator runs a server outside the firewall on their own VPS, and
+their two Bale accounts talk to each other to move bytes — to the network it
+just looks like two friends chatting.
 
+The actual code lives under [`web-tunnel/`](./web-tunnel) as a pnpm monorepo.
 
-## Getting started
+## How it works (one-paragraph version)
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+Each side has a Bale account. The client opens a local **SOCKS5 proxy** on
+`127.0.0.1:1080`. When an app connects to that proxy, the client wraps the
+target address into a framed packet, encrypts it with a key derived from a
+**shared password** (scrypt → AEAD), splits it into chat-message-sized chunks,
+and *sends them as Bale messages* to the server's account. The server's Bale
+account receives the chunks, the dispatcher reassembles and decrypts them,
+opens a real TCP/UDP connection to the destination, and proxies bytes back the
+same way. To Bale (and to anyone watching the network) it's two ordinary
+accounts trading text.
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/Alavi1412/anti-censorship.git
-git branch -M main
-git push -uf origin main
+   ┌──────────────┐    SOCKS5     ┌──────────────┐
+   │  user's app  │ ────────────▶ │ client app   │
+   └──────────────┘               │ (Electron /  │
+                                  │  Android)    │
+                                  └──────┬───────┘
+                                         │ encrypted, framed
+                                         ▼ chat messages
+                                  ┌──────────────┐
+                                  │ Bale servers │  ← looks like normal chat
+                                  └──────┬───────┘
+                                         │
+                                  ┌──────▼───────┐
+                                  │ server (Node │
+                                  │  + Python    │
+                                  │  Bale sidecar)│
+                                  └──────┬───────┘
+                                         │ real TCP/UDP
+                                         ▼
+                                    open internet
 ```
 
-## Integrate with your tools
+## Repository layout
 
-* [Set up project integrations](https://gitlab.com/Alavi1412/anti-censorship/-/settings/integrations)
+Everything operational is inside [`web-tunnel/`](./web-tunnel). The pnpm
+workspace defines six packages plus two app shells:
 
-## Collaborate with your team
+| Path | What it is |
+|---|---|
+| `web-tunnel/shared/` | Protocol primitives shared by every component: framing, AEAD handshake (PSK + Noble crypto), stream multiplexer (`mux`, `mux-v2`), Bale gRPC-Web client, LiveKit transport, mocks. |
+| `web-tunnel/client/` | Headless Node client. Opens the local SOCKS5 listener and runs the tunnel over a `Transport` (WebSocket loopback for dev, Bale chat in prod). |
+| `web-tunnel/server/` | Headless Node server. Accepts tunnels, multiplexes streams, egresses to the real internet, hosts the loopback dashboard on `:4402`. |
+| `web-tunnel/server/py/` | Python "Bale sidecar" (`bale_sidecar`). Wraps the unofficial Bale gRPC API; handles login (phone → OTP → JWT) and message I/O for the server. |
+| `web-tunnel/client-electron/` | Windows desktop app. Wraps the client in Electron + a small UI for phone login, chat-picker, and Start/Stop. Builds to `WebTunnel-Client.exe`. |
+| `web-tunnel/server-electron/` | Same idea for the operator's server (one-binary install on Windows VPS). |
+| `web-tunnel/client-android/` | Native Android client (Kotlin). VPN-service mode using `hev-socks5-tunnel` to capture all device traffic into the SOCKS5 proxy. |
+| `web-tunnel/probe/` | Throwaway scripts and end-to-end probes used during development (network captures, WebRTC sanity checks). |
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## Protocol, in layers
 
-## Test and Deploy
+1. **Carrier.** Whatever bidirectional message bus is available to a pair of
+   Bale accounts: the chat itself (low throughput, ~5–30 KB/s, always works),
+   or a LiveKit WebRTC room created via Bale's `Meet/StartCall` RPC (high
+   throughput, built and tested against mocks but not fully wired in v1).
+2. **Magic envelope.** Every payload begins with a 4-byte magic
+   (`__WT_REQ__`, `__WT_OK__`, `__WT_FRAME__`, …) so the receiver can tell
+   tunnel traffic apart from real chat messages and ignore the rest.
+3. **Handshake.** PSK is `scrypt(password, salt)`. The client sends an
+   ECDH ephemeral key inside an AEAD-sealed `__WT_REQ__`; the server replies
+   with `__WT_OK__` containing its own ephemeral key. After that, both sides
+   share a session key. (V2 adds server identity verification + a denial frame
+   so wrong passwords fail loudly instead of hanging.)
+4. **Frame.** A varint-length opcode + payload (`OPEN`, `DATA`, `CLOSE`,
+   `WINDOW`, …) chunked to fit the carrier's max-message size.
+5. **Mux.** Many logical streams (one per SOCKS connection) ride a single
+   tunnel, identified by stream IDs with per-stream flow control. V2 adds
+   per-frame LZ4 compression and a UDP flow type for things like DNS.
 
-Use the built-in continuous integration in GitLab.
+## Safety, encryption, and what Bale can see
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+The whole design assumes Bale itself is **not trusted** — they run the
+servers your messages flow through, they can read every chat, and they
+co-operate with the regulator. So everything sensitive is sealed before it
+ever touches a Bale API call. The only thing Bale handles is opaque ciphertext
+wrapped in a magic prefix.
 
-***
+### Key derivation and handshake
 
-# Editing this README
+Implemented in [`shared/src/handshake.ts`](./web-tunnel/shared/src/handshake.ts)
+and [`handshake-v2.ts`](./web-tunnel/shared/src/handshake-v2.ts), all using
+audited primitives from `@noble/ciphers`, `@noble/curves`, and
+`@noble/hashes`.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+- **PSK from password.** `scrypt(password, salt, N=2¹⁵, r=8, p=1) → 32-byte key`.
+  scrypt's memory-hardness makes the password expensive to brute-force even
+  with a leaked transcript.
+- **v1 handshake (chat carrier).** Client sends `clientNonce ‖ HMAC-SHA256(psk, "WT-REQ" ‖ clientNonce)`,
+  server replies with `serverNonce ‖ HMAC-SHA256(psk, "WT-OK" ‖ clientNonce ‖ serverNonce)`.
+  Both sides then derive the session key with
+  `HKDF-SHA256(psk ‖ clientNonce ‖ serverNonce, "web-tunnel session v0") → 32 bytes`.
+- **v2 handshake (with server identity).** Server has a long-lived **Ed25519**
+  identity key. Each side generates a fresh **X25519** ephemeral, exchanges
+  it, and the server signs the full transcript with Ed25519. The client gets
+  a server **fingerprint** it can pin, so a Bale operator who tampers with
+  messages can't silently MITM a future session. Forward secrecy comes from
+  the ephemeral X25519 share — even if the long-term password leaks later,
+  past sessions stay sealed.
 
-## Suggestions for a good README
+### Session encryption (the bytes Bale actually carries)
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+Every payload (`OPEN`, `DATA`, `CLOSE`, `WINDOW`, …) is encrypted with
+**XChaCha20-Poly1305** AEAD: 32-byte session key, fresh 24-byte random
+nonce per message, 16-byte Poly1305 authentication tag. So Bale only ever
+gets `nonce ‖ ciphertext ‖ tag`. They cannot:
 
-## Name
-Choose a self-explaining name for your project.
+- read the destination hostname, port, or any plaintext bytes,
+- alter even one byte without the AEAD tag failing on the other side,
+- replay an old message in a new session (different session key, different
+  nonces; mux frames also carry stream IDs and sequence info).
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+### Wire format on the chat
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+A chat message looks like this:
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+```
+__WT_FRAME__<sessionTag>.<base64url(ciphertext)>
+```
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+- The **magic prefix** (`__WT_REQ__`, `__WT_OK__`, `__WT_DENY__`,
+  `__WT_FRAME__`, `__WT2_FRAME__`, `__WT_MEET__`) tells the dispatcher this is
+  tunnel traffic. Anything without it is treated as a real chat message and
+  ignored. Defined in [`shared/src/magic.ts`](./web-tunnel/shared/src/magic.ts).
+- The optional **session tag** lets one Bale chat carry several concurrent
+  client tunnels without crosstalk.
+- The **base64url** part is just the AEAD ciphertext — no headers, no
+  recognisable protocol bytes inside.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+This is honest about what it is: it does **not** try to look like normal chat
+("steganography"). It looks like a bot trading opaque tokens. The hiding power
+is "Bale won't single this out among millions of chats", not "this is
+indistinguishable from a love letter". A motivated platform-side classifier
+that flags long base64-looking messages on a single account would catch it —
+which is why the docs insist on a throwaway server account and the `v2`
+roadmap includes the LiveKit/WebRTC carrier where the bytes ride a real audio
+call instead of chat messages.
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+### Local secrets
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+- **Password.** Lives in `WT_PASSWORD` env var on both sides. Never written to
+  disk, never sent to Bale (only its scrypt-derived key is used, and only
+  inside HMAC/HKDF — the PSK itself never goes on the wire).
+- **Bale session JWT.** Stored at `~/.webtunnel/server-session.bale` (server)
+  or in the OS keychain via Electron `safeStorage` (desktop client) — same
+  trust level as your normal Bale login.
+- **Server identity key (v2).** Lives next to the server config; rotating it
+  invalidates pinned client fingerprints, same as an SSH host key.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+### Threats this design does *not* defeat
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+- **Traffic analysis at the ISP.** TLS to Bale's servers is fine, but the
+  *pattern* (constant chat with one contact, message sizes, inter-arrival
+  times) is visible to anyone watching the link. A determined adversary doing
+  on-path classification could spot it.
+- **Bale account ban.** Bale can detect the high message rate on the server
+  account and disable it. The design assumes accounts are cheap to replace.
+- **Endpoint compromise.** If the client device is rooted or the server VPS is
+  taken over, all the crypto in the world doesn't help.
+- **Quantum.** No post-quantum primitives in v1. Anything Bale records today
+  could be decrypted later with a sufficiently powerful quantum computer
+  (roughly 10–20 years out by current public estimates).
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+## Running it
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+The full operator and end-user guides already live next to the code:
+
+- **Server operator:** [`web-tunnel/server/SERVER-SETUP.md`](./web-tunnel/server/SERVER-SETUP.md)
+  — VPS install, Bale login, systemd unit, dashboard SSH-tunnel.
+- **End user (Windows):** [`web-tunnel/client-electron/CLIENT-SETUP.md`](./web-tunnel/client-electron/CLIENT-SETUP.md)
+  — extract zip, log into Bale, pick the operator's chat, paste shared password,
+  point apps at SOCKS5 `127.0.0.1:1080`.
+
+Quick local development loop (no Bale account needed — uses the loopback
+WebSocket transport and mocks):
+
+```bash
+cd web-tunnel
+pnpm install
+pnpm -r test       # framing, handshake, mux, SOCKS5, dashboard, dispatcher
+pnpm -r typecheck
+```
+
+Building release binaries:
+
+```bash
+pnpm release:windows    # both client and server .exe
+pnpm release:android    # signed APK via Gradle
+```
+
+## Threat model and limits (v1)
+
+- **Authentication is a shared password.** Anyone who knows it gets a tunnel.
+  No per-client approval inbox yet.
+- **Bale account hygiene.** Use a dedicated throwaway account on the server
+  side — heavy framed traffic looks abnormal and risks an account ban.
+- **Throughput** in chat-only mode is bounded by Bale's per-account message
+  rate (~3 msg/sec → 5–30 KB/s). The LiveKit/WebRTC carrier is designed to
+  blow past that ceiling but the call-start glue on the server is still TODO.
+- **Wrong-password handshakes hang silently** in v1; V2 adds an explicit deny.
+- **Code-signing.** Windows binaries are unsigned, so SmartScreen will warn
+  on first run.
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Vendored third-party code keeps its original license (e.g.
+`HEV-SOCKS5-TUNNEL-LICENSE.txt` in `client-android/`). Project license: TBD.

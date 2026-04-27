@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+    <title>Web Tunnel v0.2</title>
+    <style>
+      :root {
+        --bg: #0e0f12;
+        --panel: #161922;
+        --text: #e6e8ee;
+        --muted: #8a90a1;
+        --accent: #4cd4a3;
+        --warn: #f4a056;
+        --err: #e45656;
+        --border: #232736;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg); color: var(--text); }
+      body { display: flex; flex-direction: column; }
+      header { padding: 12px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+      header h1 { margin: 0; font-size: 14px; font-weight: 600; }
+      header .me { color: var(--muted); font-size: 12px; margin-left: auto; }
+      header .btn { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 11px; }
+      main { flex: 1; padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; }
+      .card h2 { margin: 0 0 10px; font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+      label { display: block; margin: 6px 0 3px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+      input, select, button { font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; width: 100%; }
+      button { cursor: pointer; width: auto; padding: 8px 18px; }
+      button.primary { background: var(--accent); color: #08211a; border-color: var(--accent); font-weight: 500; }
+      button.primary:hover { background: #6fe3b9; }
+      button.danger { background: transparent; color: var(--err); border-color: var(--err); }
+      button.ghost { background: transparent; border-color: var(--border); color: var(--muted); }
+      button.ghost:hover { border-color: var(--muted); color: var(--text); }
+      button:disabled { opacity: .45; cursor: not-allowed; }
+      .link { background: transparent; border: 0; color: var(--accent); padding: 0; cursor: pointer; font: inherit; text-decoration: underline; }
+      .link:hover { color: #6fe3b9; }
+      .step-meta { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 11px; color: var(--muted); gap: 12px; }
+      .step-meta button { padding: 4px 10px; }
+      .row { display: flex; gap: 12px; align-items: flex-end; }
+      .row > * { flex: 1; }
+      .row > button { flex: 0 0 auto; }
+      .err { color: var(--err); font-size: 12px; padding: 8px 10px; background: rgba(228,86,86,0.08); border: 1px solid rgba(228,86,86,0.25); border-radius: 4px; }
+      .kpi { display: flex; gap: 22px; flex-wrap: wrap; }
+      .kpi .item strong { display: block; font-size: 20px; color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+      .kpi .item span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+      .muted { color: var(--muted); }
+      .step-sub { color: var(--muted); font-size: 11px; margin-top: 4px; }
+      code { background: var(--bg); padding: 2px 5px; border-radius: 3px; font-size: 11px; border: 1px solid var(--border); }
+      .event-log { margin-top: 10px; font-size: 11px; color: var(--muted); max-height: 120px; overflow-y: auto; }
+      .event-log div { padding: 2px 0; border-bottom: 1px solid rgba(35,39,54,0.5); }
+      .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 6px; vertical-align: middle; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .speed-result { margin-top: 10px; padding: 8px 10px; background: rgba(76,212,163,0.06); border: 1px solid rgba(76,212,163,0.2); border-radius: 4px; font-size: 12px; }
+      .speed-result .row-stat { display: flex; justify-content: space-between; padding: 2px 0; }
+      .speed-result .val { color: var(--accent); font-weight: 500; }
+      .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+      /* Toggle pill — used for system-tunnel + LAN share. Inert state is grey
+         outline; ON state is solid accent; busy state shows a spinner instead
+         of the label. */
+      .toggle-pill {
+        position: relative; display: inline-flex; align-items: center; justify-content: center;
+        min-width: 76px; min-height: 30px; padding: 4px 14px; border-radius: 999px;
+        border: 1px solid var(--border); background: transparent; color: var(--muted);
+        font: inherit; font-size: 12px; font-weight: 600; letter-spacing: .04em;
+        cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+      }
+      .toggle-pill:hover:not(:disabled) { border-color: var(--muted); color: var(--text); }
+      .toggle-pill.is-on { background: var(--accent); color: #08211a; border-color: var(--accent); }
+      .toggle-pill.is-on:hover:not(:disabled) { background: #6fe3b9; }
+      .toggle-pill:disabled { opacity: .5; cursor: not-allowed; }
+      .toggle-pill .label { display: inline-block; }
+      .toggle-pill.is-busy .label { visibility: hidden; }
+      .toggle-pill.is-busy::after {
+        content: ""; position: absolute; width: 14px; height: 14px;
+        border: 2px solid currentColor; border-top-color: transparent;
+        border-radius: 50%; animation: spin 0.7s linear infinite;
+      }
+      .qr-box {
+        margin-top: 10px; padding: 10px; background: #fff;
+        border: 1px solid var(--border); border-radius: 6px; display: inline-block;
+      }
+      .qr-box img { display: block; image-rendering: pixelated; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>web-tunnel v0.2</h1>
+      <div id="me" class="me">not logged in</div>
+      <button id="open-log" class="btn" title="open debug log">Open log</button>
+      <button id="send-logs" class="btn" title="upload recent logs to server">Send logs</button>
+      <button id="signout" class="btn" style="display:none;">Sign out</button>
+    </header>
+    <main>
+      <div id="err-card" class="card" style="display:none;">
+        <h2>Error</h2>
+        <div id="err" class="err" style="white-space:pre-wrap; font-family: ui-monospace, Menlo, monospace; user-select: text; max-height: 260px; overflow-y: auto;"></div>
+        <div style="margin-top:8px; font-size:11px; color: var(--muted);">
+          See the full debug log — click
+          <button id="copy-err" class="link" type="button">copy error</button>
+          or use the Open log button.
+        </div>
+      </div>
+
+      <div id="key-mismatch-card" class="card" style="display:none; border-color: var(--warn);">
+        <h2 style="color:var(--warn);">Server Key Changed</h2>
+        <div id="key-mismatch-text" class="muted"></div>
+        <div style="margin-top:10px; display:flex; gap:10px;">
+          <button id="trust-reset" class="ghost" type="button">Clear pins and reconnect</button>
+        </div>
+      </div>
+
+      <div id="phone-step" class="card" style="display:none;">
+        <h2>Log in with your phone number</h2>
+        <div class="row">
+          <div>
+            <label for="phone">Phone (international format, no +, e.g. 989123456789)</label>
+            <input id="phone" type="tel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="98..." />
+          </div>
+          <button id="send-code" class="primary">Send code</button>
+        </div>
+      </div>
+
+      <div id="code-step" class="card" style="display:none;">
+        <div class="step-meta">
+          <button id="back-from-code" class="ghost" type="button">Back</button>
+          <span>Code sent to <code id="code-phone-display">-</code></span>
+          <button id="resend-code" class="link" type="button">Resend code</button>
+        </div>
+        <h2>Enter the code from the SMS</h2>
+        <div class="row">
+          <div>
+            <label for="code">Code</label>
+            <input id="code" type="text" inputmode="numeric" placeholder="123456" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </div>
+          <button id="verify-code" class="primary">Verify</button>
+        </div>
+      </div>
+
+      <div id="password-step" class="card" style="display:none;">
+        <div class="step-meta">
+          <button id="back-from-password" class="ghost" type="button">Back</button>
+          <span>2FA enabled on <code id="pw-phone-display">-</code></span>
+          <span></span>
+        </div>
+        <h2>Two-factor password</h2>
+        <div class="row">
+          <div>
+            <label for="password">Your Bale 2FA password</label>
+            <input id="password" type="password" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </div>
+          <button id="verify-password" class="primary">Verify</button>
+        </div>
+      </div>
+
+      <div id="picker" class="card" style="display:none;">
+        <h2>Start a tunnel</h2>
+
+        <label>Carrier</label>
+        <div id="carrier-switch" style="display:flex; gap:18px; margin-bottom:10px; align-items:center;">
+          <label style="display:inline-flex; align-items:center; gap:6px; width:auto; color:var(--text); text-transform:none; letter-spacing:0; font-size:12px; margin:0;">
+            <input type="radio" name="carrier" value="webrtc" id="carrier-webrtc" checked style="width:auto; margin:0;" />
+            <span>WebRTC (LiveKit) <span class="muted" style="font-size:11px;" id="webrtc-hint">- fast, default</span></span>
+          </label>
+          <label style="display:inline-flex; align-items:center; gap:6px; width:auto; color:var(--text); text-transform:none; letter-spacing:0; font-size:12px; margin:0;">
+            <input type="radio" name="carrier" value="chat" id="carrier-chat" style="width:auto; margin:0;" />
+            <span>Chat (Bale messages) <span class="muted" style="font-size:11px;">- fallback</span></span>
+          </label>
+        </div>
+
+        <label for="peer-select">Server's Bale account</label>
+        <select id="peer-select"><option value="">- loading contacts -</option></select>
+
+        <div class="row" style="margin-top:10px;">
+          <div style="max-width: 110px;">
+            <label for="socks-port">SOCKS5 port</label>
+            <input id="socks-port" type="number" value="1080" min="1" max="65535" />
+          </div>
+          <button id="start" class="primary" style="align-self:flex-end;">Start tunnel</button>
+        </div>
+        <div id="retry-hint" class="step-sub"></div>
+      </div>
+
+      <div id="connecting-card" class="card" style="display:none;">
+        <h2><span class="spinner"></span>Connecting…</h2>
+        <div id="connecting-events" class="event-log"></div>
+      </div>
+
+      <div id="connected" class="card" style="display:none;">
+        <h2>Tunnel active</h2>
+        <div class="kpi">
+          <div class="item"><strong id="k-server">-</strong><span>Server</span></div>
+          <div class="item"><strong id="k-socks">-</strong><span>SOCKS5</span></div>
+          <div class="item"><strong id="k-streams">0 / 0</strong><span>Streams (open/total)</span></div>
+          <div class="item"><strong id="k-up">0 B</strong><span>Uploaded</span></div>
+          <div class="item"><strong id="k-down">0 B</strong><span>Downloaded</span></div>
+          <div class="item"><strong id="k-since">0s</strong><span>Uptime</span></div>
+        </div>
+        <div class="actions">
+          <button id="stop" class="danger">Stop tunnel</button>
+          <button id="speed-test" class="ghost">Test speed</button>
+        </div>
+        <div style="margin-top:8px;">
+          <span class="muted" style="font-size:11px;">Point your app at <code>socks5://127.0.0.1:<span id="socks-hint">1080</span></code>.</span>
+        </div>
+        <div id="speed-result" style="display:none;" class="speed-result">
+          <div class="row-stat"><span>Latency</span><span id="sr-latency" class="val">-</span></div>
+          <div class="row-stat"><span>Upload</span><span id="sr-upload" class="val">-</span></div>
+          <div class="row-stat"><span>Download</span><span id="sr-download" class="val">-</span></div>
+        </div>
+        <div id="connection-state" class="step-sub" style="margin-top:8px;"></div>
+
+        <!-- Whole-system tunnel toggle (Hiddify-style sing-box). -->
+        <div style="margin-top:14px; padding-top:14px; border-top: 1px solid var(--border);">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+            <div>
+              <div style="font-weight:500; font-size:12px;">Tunnel whole system</div>
+              <div id="system-tunnel-hint" class="step-sub">Routes ALL Windows traffic through this tunnel via sing-box.</div>
+            </div>
+            <button id="system-tunnel-toggle" class="toggle-pill" type="button" disabled>
+              <span class="label">OFF</span>
+            </button>
+          </div>
+          <div id="system-tunnel-detail" class="step-sub" style="margin-top:6px;"></div>
+        </div>
+
+        <!-- LAN share (vmess listener). -->
+        <div style="margin-top:14px; padding-top:14px; border-top: 1px solid var(--border);">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+            <div>
+              <div style="font-weight:500; font-size:12px;">Share with LAN</div>
+              <div class="step-sub">Other devices on the same Wi-Fi can scan a QR to tunnel through this PC.</div>
+            </div>
+            <button id="lan-share-toggle" class="toggle-pill" type="button">
+              <span class="label">OFF</span>
+            </button>
+          </div>
+          <div id="lan-share-info" style="margin-top:10px; display:none;">
+            <div class="step-sub">Listener: <code id="lan-host-port">-</code></div>
+            <div class="qr-box"><img id="lan-qr" alt="Scan with v2rayNG / v2rayN" /></div>
+            <div style="margin-top:6px;"><code id="lan-vmess-url" style="word-break:break-all; font-size:10px;"></code></div>
+            <div style="margin-top:8px; display:flex; gap:12px;">
+              <button id="lan-copy-url" class="link" type="button">Copy URL</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let startedAt = null;
+
+      function fmtBytes(n) {
+        if (n < 1024) return n + ' B';
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+        if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(2) + ' MB';
+        return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+      }
+      function fmtDuration(ms) {
+        const s = Math.floor(ms / 1000);
+        if (s < 60) return s + 's';
+        if (s < 3600) return Math.floor(s / 60) + 'm' + (s % 60) + 's';
+        return Math.floor(s / 3600) + 'h' + Math.floor((s % 3600) / 60) + 'm';
+      }
+      function fmtKbps(kbps) {
+        if (kbps < 1000) return kbps + ' KB/s';
+        return (kbps / 1024).toFixed(1) + ' MB/s';
+      }
+
+      function render(status) {
+        $('err-card').style.display = status.lastError && !status.lastError.includes('SERVER_KEY_MISMATCH') ? 'block' : 'none';
+        $('err').textContent = status.lastError || '';
+        $('send-logs').disabled = status.sendLogsState === 'sending';
+
+        const keyMismatch = status.keyTrustState === 'mismatch';
+        $('key-mismatch-card').style.display = keyMismatch ? 'block' : 'none';
+        if (keyMismatch && status.lastError) {
+          $('key-mismatch-text').textContent = status.lastError.replace('SERVER_KEY_MISMATCH: ', '');
+        }
+
+        $('me').textContent = status.me ? ('logged in as ' + (status.me.name || ('user ' + status.me.id))) : 'not logged in';
+        $('signout').style.display = status.loginStage === 'ready' ? 'inline-block' : 'none';
+
+        const show = (id, visible) => { $(id).style.display = visible ? 'block' : 'none'; };
+        show('phone-step', status.loginStage === 'unauthenticated');
+        show('code-step', status.loginStage === 'awaiting-code');
+        show('password-step', status.loginStage === 'awaiting-password');
+        show('picker', status.loginStage === 'ready' && !status.tunnel && !status.connecting);
+        show('connecting-card', !!status.connecting && !status.tunnel);
+        show('connected', !!status.tunnel);
+
+        if (status.connecting && status.connecting.events) {
+          const log = $('connecting-events');
+          log.innerHTML = status.connecting.events.map((e) =>
+            '<div>' + e.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>'
+          ).join('');
+          log.scrollTop = log.scrollHeight;
+        }
+
+        if (status.pendingPhone) {
+          $('code-phone-display').textContent = status.pendingPhone;
+          $('pw-phone-display').textContent = status.pendingPhone;
+          if (status.loginStage === 'unauthenticated' && !$('phone').value) $('phone').value = status.pendingPhone;
+        }
+
+        if (status.tunnel) {
+          startedAt = status.tunnel.startedAt;
+          const carrierLabel = status.tunnel.carrier === 'webrtc' ? 'WebRTC' : 'Chat';
+          const server = status.tunnel.serverLabel || (status.tunnel.carrier === 'webrtc' ? 'livekit-room' : ('chat ' + status.tunnel.peer.chatId));
+          $('k-server').textContent = server + ' (' + carrierLabel + ')';
+          $('k-socks').textContent = '127.0.0.1:' + status.tunnel.socksPort;
+          $('socks-hint').textContent = status.tunnel.socksPort;
+          $('k-streams').textContent = status.tunnel.streamsActive + ' / ' + status.tunnel.streamsOpened;
+          $('k-up').textContent = fmtBytes(status.tunnel.bytesUp);
+          $('k-down').textContent = fmtBytes(status.tunnel.bytesDown);
+          $('k-since').textContent = fmtDuration(Date.now() - status.tunnel.startedAt);
+          const notes = [];
+          if (status.lastTerminateReason) notes.push('terminated by server: ' + status.lastTerminateReason);
+          if (status.sendLogsState && status.sendLogsState !== 'idle') notes.push('send-logs: ' + status.sendLogsState);
+          $('connection-state').textContent = notes.join(' | ');
+          $('retry-hint').textContent = '';
+        } else {
+          startedAt = null;
+          $('connection-state').textContent = '';
+          if (status.retryState === 'retrying') {
+            $('retry-hint').textContent = 'Retrying connection (attempt ' + status.retryAttempt + ')';
+          } else if (status.retryState === 'failed') {
+            $('retry-hint').textContent = 'Retry attempts exhausted';
+          } else {
+            $('retry-hint').textContent = '';
+          }
+        }
+      }
+
+      setInterval(() => {
+        if (startedAt) $('k-since').textContent = fmtDuration(Date.now() - startedAt);
+      }, 1000);
+
+      async function loadChats() {
+        try {
+          const chats = await window.wt.listChats();
+          const sel = $('peer-select');
+          sel.innerHTML = '';
+          if (!chats.length) {
+            sel.innerHTML = '<option value="">no contacts found — message someone on Bale first</option>';
+            return;
+          }
+          for (const d of chats) {
+            const opt = document.createElement('option');
+            opt.value = JSON.stringify({ chatId: d.chat_id, chatType: d.chat_type });
+            const unread = d.unread ? (' (' + d.unread + ' unread)') : '';
+            const handle = d.username ? (' @' + d.username) : '';
+            const kind = d.chat_type === 'PRIVATE' ? '' : (' [' + d.chat_type + ']');
+            opt.textContent = d.title + handle + kind + unread;
+            sel.appendChild(opt);
+          }
+        } catch (e) {
+          $('peer-select').innerHTML = '<option value="">error: ' + e.message + '</option>';
+        }
+      }
+
+      function selectedCarrier() {
+        const r = document.querySelector('input[name="carrier"]:checked');
+        return r ? r.value : 'webrtc';
+      }
+
+      $('send-code').addEventListener('click', async () => {
+        const phone = $('phone').value.trim();
+        if (!phone) return alert('Enter a phone number');
+        $('send-code').disabled = true;
+        try { await window.wt.sendPhoneCode(phone); } catch (e) { alert(e.message); }
+        $('send-code').disabled = false;
+      });
+      $('phone').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('send-code').click(); });
+
+      $('verify-code').addEventListener('click', async () => {
+        const code = $('code').value.trim();
+        if (!code) return alert('Enter the code');
+        $('verify-code').disabled = true;
+        try { await window.wt.verifyCode(code); } catch (e) { alert(e.message); }
+        $('verify-code').disabled = false;
+      });
+      $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('verify-code').click(); });
+
+      $('verify-password').addEventListener('click', async () => {
+        const pw = $('password').value;
+        if (!pw) return alert('Enter your 2FA password');
+        $('verify-password').disabled = true;
+        try { await window.wt.verifyPassword(pw); } catch (e) { alert(e.message); }
+        $('verify-password').disabled = false;
+      });
+      $('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('verify-password').click(); });
+
+      $('back-from-code').addEventListener('click', async () => { $('code').value = ''; await window.wt.backToPhone(); });
+      $('back-from-password').addEventListener('click', async () => { $('password').value = ''; await window.wt.backToCode(); });
+      $('resend-code').addEventListener('click', async () => {
+        $('resend-code').disabled = true;
+        try { await window.wt.resendCode(); alert('New code sent.'); } catch (e) { alert(e.message); }
+        $('resend-code').disabled = false;
+      });
+
+      $('signout').addEventListener('click', async () => {
+        if (!confirm('Sign out and forget the saved session?')) return;
+        await window.wt.signOut();
+      });
+
+      $('open-log').addEventListener('click', async () => {
+        try { await window.wt.openLog(); } catch (e) { alert('openLog failed: ' + e.message); }
+      });
+      $('send-logs').addEventListener('click', async () => {
+        try { await window.wt.sendLogs(); } catch (e) { alert(e.message); }
+      });
+      $('copy-err').addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText($('err').textContent || ''); } catch {}
+      });
+
+      $('start').addEventListener('click', async () => {
+        const carrier = selectedCarrier();
+        const socksPort = Number($('socks-port').value);
+        const sel = $('peer-select');
+        if (!sel.value) {
+          return alert("Pick the server's Bale account");
+        }
+        const peer = JSON.parse(sel.value);
+        const serverLabel = sel.options[sel.selectedIndex].textContent;
+        $('start').disabled = true;
+        try {
+          await window.wt.startTunnel({ carrier, peer, socksPort, serverLabel });
+        } catch (e) {
+          const msg = (e && e.message) ? e.message : String(e);
+          if (msg.includes('SOCKS_PORT_IN_USE:')) {
+            return alert('SOCKS port is already in use. Change Local SOCKS5 port and try again.');
+          }
+          if (msg.includes('handshake timeout')) {
+            return alert('Connection timed out — server did not respond. Check the selected account and try again.');
+          }
+          if (msg.includes('MUX_CLOSED_DURING_START:')) {
+            return alert('Tunnel closed before startup completed. Try again; if it repeats, verify server is online and the correct account is selected.');
+          }
+          alert(msg);
+        } finally {
+          $('start').disabled = false;
+        }
+      });
+
+      $('stop').addEventListener('click', async () => { await window.wt.stopTunnel(); });
+
+      $('trust-reset').addEventListener('click', async () => {
+        if (!confirm('Clear all pinned server keys and reconnect?')) return;
+        try { await window.wt.resetPinnedKey(null); } catch (e) { alert(e.message); }
+      });
+
+      $('speed-test').addEventListener('click', async () => {
+        const btn = $('speed-test');
+        btn.disabled = true;
+        btn.textContent = 'Testing...';
+        $('speed-result').style.display = 'none';
+        try {
+          const result = await window.wt.speedTest();
+          $('sr-latency').textContent = result.latencyMs + ' ms';
+          $('sr-upload').textContent = fmtKbps(result.uploadKbps);
+          $('sr-download').textContent = fmtKbps(result.downloadKbps);
+          $('speed-result').style.display = 'block';
+        } catch (e) {
+          alert('Speed test failed: ' + e.message);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Test speed';
+        }
+      });
+
+      window.wt.onStatusChange((status) => {
+        render(status);
+        if (status.loginStage === 'ready' && !status.tunnel && !status.connecting) loadChats();
+      });
+
+      // ---- System tunnel (Hiddify-style) ----
+      let isAdmin = false;
+      let singBoxAvailable = false;
+      let systemTunnelStatus = 'off';
+      function setBusy(btn, busy) {
+        if (busy) btn.classList.add('is-busy');
+        else btn.classList.remove('is-busy');
+      }
+      function renderSystemTunnel(status, detail) {
+        systemTunnelStatus = status;
+        const btn = $('system-tunnel-toggle');
+        const labelEl = btn.querySelector('.label');
+        const detailEl = $('system-tunnel-detail');
+        const hint = $('system-tunnel-hint');
+        const isBusy = status === 'starting';
+        const isOn = status === 'on';
+        labelEl.textContent = isOn ? 'ON' : 'OFF';
+        btn.classList.toggle('is-on', isOn);
+        setBusy(btn, isBusy);
+        let disabled = false;
+        let reason = '';
+        if (!isAdmin) { disabled = true; reason = 'Run as Administrator to enable. Right-click the .exe → Run as administrator.'; }
+        else if (!singBoxAvailable) { disabled = true; reason = 'sing-box.exe missing — see resources/sing-box/README.md'; }
+        btn.disabled = disabled || isBusy;
+        hint.textContent = reason || 'Routes ALL Windows traffic through this tunnel via sing-box.';
+        detailEl.textContent = detail || '';
+      }
+      $('system-tunnel-toggle').addEventListener('click', async () => {
+        const btn = $('system-tunnel-toggle');
+        setBusy(btn, true); btn.disabled = true;
+        try {
+          if (systemTunnelStatus === 'on' || systemTunnelStatus === 'starting') {
+            const r = await window.wt.systemTunnel.stop();
+            renderSystemTunnel(r.status, r.detail);
+          } else {
+            const r = await window.wt.systemTunnel.start();
+            renderSystemTunnel(r.status, r.detail);
+          }
+        } catch (e) {
+          renderSystemTunnel('error', e.message);
+          alert('System tunnel: ' + e.message);
+        }
+      });
+      window.wt.systemTunnel.onStatus((p) => renderSystemTunnel(p.status, p.detail));
+
+      // ---- LAN share ----
+      let lanShareInfo = null;
+      function renderLanShare(status, detail, info) {
+        const btn = $('lan-share-toggle');
+        const labelEl = btn.querySelector('.label');
+        const infoBox = $('lan-share-info');
+        const isBusy = status === 'starting';
+        const isOn = status === 'on';
+        labelEl.textContent = isOn ? 'ON' : 'OFF';
+        btn.classList.toggle('is-on', isOn);
+        setBusy(btn, isBusy);
+        btn.disabled = (!singBoxAvailable) || isBusy;
+        if (isOn && info) {
+          lanShareInfo = info;
+          infoBox.style.display = 'block';
+          $('lan-host-port').textContent = info.host + ':' + info.port;
+          $('lan-vmess-url').textContent = info.vmessUrl;
+          // Always render the QR — user shouldn't need a separate button.
+          window.wt.lanShare.qr(info.vmessUrl)
+            .then((dataUrl) => { $('lan-qr').src = dataUrl; })
+            .catch((e) => { console.warn('QR render failed:', e); });
+        } else {
+          lanShareInfo = null;
+          infoBox.style.display = 'none';
+          $('lan-qr').removeAttribute('src');
+        }
+      }
+      $('lan-share-toggle').addEventListener('click', async () => {
+        const btn = $('lan-share-toggle');
+        setBusy(btn, true); btn.disabled = true;
+        try {
+          const cur = await window.wt.lanShare.status();
+          if (cur.status === 'on') {
+            const r = await window.wt.lanShare.stop();
+            renderLanShare(r.status, r.detail, r.info);
+          } else {
+            const r = await window.wt.lanShare.start();
+            renderLanShare(r.status, r.detail, r.info);
+          }
+        } catch (e) {
+          renderLanShare('error', e.message, null);
+          alert('LAN share: ' + e.message);
+        }
+      });
+      window.wt.lanShare.onStatus((p) => renderLanShare(p.status, p.detail, p.info));
+      $('lan-copy-url').addEventListener('click', async () => {
+        if (!lanShareInfo) return;
+        try { await navigator.clipboard.writeText(lanShareInfo.vmessUrl); $('lan-copy-url').textContent = 'Copied!'; setTimeout(() => $('lan-copy-url').textContent = 'Copy URL', 1500); } catch {}
+      });
+
+      async function applyCaps() {
+        try {
+          const caps = await window.wt.getCaps();
+          isAdmin = !!caps.isAdmin;
+          singBoxAvailable = !!caps.singBoxAvailable;
+          renderSystemTunnel('off', null);
+          renderLanShare('off', null, null);
+          const rb = $('carrier-webrtc');
+          const hint = $('webrtc-hint');
+          if (!caps.hasWebrtc) {
+            rb.disabled = true;
+            hint.textContent = '- available after Bale login';
+            if (rb.checked) { $('carrier-chat').checked = true; }
+          } else {
+            rb.disabled = false;
+            hint.textContent = '- fast, default';
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // QR rendering happens in the main process via the qrcode npm package
+      // (renderLanShare → window.wt.lanShare.qr → IPC → data URL → <img>).
+
+      (async () => {
+        const st = await window.wt.getStatus();
+        render(st);
+        await applyCaps();
+        if (st.loginStage === 'ready' && !st.tunnel) loadChats();
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "name": "web-tunnel",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "release:client-windows": "pnpm --filter @webtunnel/client-electron dist:win",
+    "release:server-windows": "pnpm --filter @webtunnel/server-electron dist:win",
+    "release:windows": "pnpm release:server-windows && pnpm release:client-windows",
+    "release:android": "client-android/gradlew.bat -p client-android :app:assembleRelease",
+    "release:android-debug": "client-android/gradlew.bat -p client-android :app:assembleDebug",
+    "release:all": "pnpm release:windows && pnpm release:android"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}

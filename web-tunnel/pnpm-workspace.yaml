@@ -1,0 +1,7 @@
+packages:
+  - shared
+  - server
+  - client
+  - client-electron
+  - server-electron
+  - probe

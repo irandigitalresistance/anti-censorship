@@ -1,0 +1,28 @@
+{
+  "name": "@webtunnel/client-electron",
+  "version": "0.2.0",
+  "description": "Web Tunnel Windows client (Electron) — anti-censorship proxy over Bale Messenger",
+  "author": "Web Tunnel",
+  "private": true,
+  "main": "dist/main/main.cjs",
+  "scripts": {
+    "build": "esbuild src/main/main.ts --bundle --outfile=dist/main/main.cjs --platform=node --format=cjs --target=node20 --external:electron --external:@livekit/rtc-node --external:livekit-client --external:qrcode && node -e \"require('fs').copyFileSync('src/main/preload.cjs','dist/main/preload.cjs')\"",
+    "dev": "pnpm build && electron .",
+    "typecheck": "tsc --noEmit",
+    "dist:win": "pnpm build && electron-builder --win --config electron-builder.yml"
+  },
+  "dependencies": {
+    "@livekit/rtc-node": "^0.13.25",
+    "livekit-client": "^2.18.4",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.6",
+    "@webtunnel/client": "workspace:*",
+    "@webtunnel/server": "workspace:*",
+    "@webtunnel/shared": "workspace:*",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0"
+  }
+}

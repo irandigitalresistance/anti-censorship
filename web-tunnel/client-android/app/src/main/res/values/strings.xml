@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">Web Tunnel v0.2</string>
+  <string name="header_title">web-tunnel v0.2</string>
+  <string name="not_logged_in">not logged in</string>
+  <string name="open_log">Open log</string>
+  <string name="sign_out">Sign out</string>
+  <string name="error_title">Error</string>
+  <string name="login_title">Log in with your phone number</string>
+  <string name="phone_hint">Phone (international format, no +, e.g. 989123456789)</string>
+  <string name="phone_sub">Bale will SMS an OTP to this number.</string>
+  <string name="send_code">Send code</string>
+  <string name="back">Back</string>
+  <string name="code_sent_to">Code sent to</string>
+  <string name="resend_code">Resend code</string>
+  <string name="code_title">Enter the code from the SMS</string>
+  <string name="code_label">Code</string>
+  <string name="verify">Verify</string>
+  <string name="two_factor_enabled">2FA enabled on</string>
+  <string name="password_title">Two-factor password</string>
+  <string name="password_label">Your Bale 2FA password</string>
+  <string name="start_tunnel_title">Start a tunnel</string>
+  <string name="carrier_label">Carrier</string>
+  <string name="carrier_chat">Chat (Bale messages) — reliable, slow</string>
+  <string name="carrier_webrtc">WebRTC (LiveKit) — fast, requires LiveKit</string>
+  <string name="peer_picker_label">Server\'s Bale account</string>
+  <string name="socks_port_label">SOCKS5 port</string>
+  <string name="connecting_title">Connecting…</string>
+  <string name="test_speed">Test speed</string>
+  <string name="send_logs">Send logs</string>
+  <string name="speed_latency_label">Latency (ping)</string>
+  <string name="speed_upload_label">Upload</string>
+  <string name="speed_download_label">Download</string>
+  <string name="start_tunnel">Start tunnel</string>
+  <string name="tunnel_active_title">Tunnel active</string>
+  <string name="server_label">Server</string>
+  <string name="socks_label">SOCKS5</string>
+  <string name="streams_label">Streams (open/total)</string>
+  <string name="uploaded_label">Uploaded</string>
+  <string name="downloaded_label">Downloaded</string>
+  <string name="uptime_label">Uptime</string>
+  <string name="stop_tunnel">Stop tunnel</string>
+  <string name="socks_hint_prefix">Android VPN is active. Manual SOCKS fallback:</string>
+</resources>

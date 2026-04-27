@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <color name="wt_bg">#0E0F12</color>
+  <color name="wt_panel">#161922</color>
+  <color name="wt_text">#E6E8EE</color>
+  <color name="wt_muted">#8A90A1</color>
+  <color name="wt_accent">#4CD4A3</color>
+  <color name="wt_err">#E45656</color>
+  <color name="wt_border">#232736</color>
+  <color name="wt_black_green">#08211A</color>
+</resources>
