@@ -12,7 +12,11 @@ data class TunnelVpnConfig(
   val remoteDns: Boolean = true,
   val enableIpv4: Boolean = true,
   val enableIpv6: Boolean = true,
-  val mtu: Int = 8500,
+  // Standard Ethernet MTU. Earlier builds used 8500 which caused fragmentation
+  // through the WebRTC data-channel carrier; large TCP segments and UDP datagrams
+  // (e.g. WebRTC voice/video, Telegram calls, Google Meet) silently dropped on
+  // some networks. 1500 matches what SocksDroid and Hiddify use for SOCKS5-TUN.
+  val mtu: Int = 1500,
 )
 
 object TunnelVpnBridge {

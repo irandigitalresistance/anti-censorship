@@ -9,7 +9,7 @@ export {
   type RunServerTunnelV2Result,
 } from './tunnel.js';
 export { PythonSidecar, type PythonSidecarOptions } from './bale-session/python-sidecar.js';
-export { BaleServerDispatcher } from './bale-session/server-dispatcher.js';
+export { BaleServerDispatcher, type BaleServerDispatcherOptions } from './bale-session/server-dispatcher.js';
 export {
   TunnelManager,
   type TunnelPeerSummary,

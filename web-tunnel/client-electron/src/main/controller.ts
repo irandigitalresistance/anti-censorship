@@ -13,7 +13,6 @@ import {
   deriveKeyFromPassword,
   deriveRoomName,
   makeBaleMeetFactory,
-  makeChatTransport,
   makeLivekitTransport,
   serverFingerprint,
   type TunnelMuxV2,
@@ -26,15 +25,12 @@ import {
 } from '@webtunnel/shared';
 import { runClientTunnelV2, startSocks5Listener, type RunClientTunnelV2Result } from '@webtunnel/client';
 
-export type Carrier = 'chat' | 'webrtc';
+export type Carrier = 'webrtc';
 
 export interface TunnelStartOptions {
-  /** Carrier for tunnel frames. Defaults to 'chat'. */
+  /** Carrier for tunnel frames. Defaults to 'webrtc'. */
   carrier?: Carrier;
-  /**
-   * Required for 'chat' carrier. For 'webrtc' carrier, still useful as a
-   * label / for hybrid flows, but the actual frames go over WebRTC.
-   */
+  /** The Bale peer used to signal which LiveKit call to join. */
   peer?: Peer;
   password?: string;
   socksPort?: number;
@@ -395,9 +391,12 @@ export class Controller extends EventEmitter {
   async startTunnel(startOpts: TunnelStartOptions): Promise<{ socksPort: number }> {
     if (!this.sidecar) throw new Error('not authenticated');
     if (this.status.tunnel) throw new Error('tunnel already running');
+    if (startOpts.carrier && startOpts.carrier !== 'webrtc') {
+      throw new Error(`unsupported Windows carrier: ${String(startOpts.carrier)}`);
+    }
 
     const normalized: TunnelStartOptions = {
-      carrier: startOpts.carrier ?? 'webrtc',
+      carrier: 'webrtc',
       peer: startOpts.peer,
       socksPort: startOpts.socksPort,
       serverLabel: startOpts.serverLabel,
@@ -538,8 +537,8 @@ export class Controller extends EventEmitter {
 
   private async startTunnelOnce(startOpts: TunnelStartOptions): Promise<{ socksPort: number }> {
     if (!this.sidecar) throw new Error('not authenticated');
-    const carrier = startOpts.carrier ?? 'webrtc';
-    this.pushConnectingEvent(carrier === 'webrtc' ? 'Initiating Bale Meet call...' : 'Setting up chat transport...');
+    const carrier: Carrier = 'webrtc';
+    this.pushConnectingEvent('Initiating Bale Meet call...');
     const { transport, effectivePeer } = await this.createTransport(carrier, startOpts);
     this.currentTransport = transport;
     const keyId = this.serverKeyId(effectivePeer);
@@ -672,16 +671,6 @@ export class Controller extends EventEmitter {
     if (!this.sidecar) throw new Error('not authenticated');
     if (!startOpts.peer) throw new Error('a Bale peer must be selected');
     const effectivePeer = startOpts.peer;
-    if (carrier === 'chat') {
-      const sessionTag = crypto.randomUUID();
-      const transport = makeChatTransport({
-        sidecar: this.sidecar,
-        peer: effectivePeer,
-        sessionTag,
-        protocolVersion: 2,
-      });
-      return { transport, effectivePeer };
-    }
     if (carrier !== 'webrtc') throw new Error(`unknown carrier: ${String(carrier)}`);
     const capturedSidecar = this.sidecar;
     const capturedPeer = effectivePeer;
@@ -791,31 +780,53 @@ export class Controller extends EventEmitter {
   ): void {
     const expected = serverFingerprint(publicKey);
     if (expected !== fingerprint) throw new Error('server fingerprint verification failed (internal error)');
-    const pinned = this.pinnedFingerprints.get(keyId) ?? null;
-    if (!pinned) {
-      // First connection: auto-pin (TOFU). No user action needed.
-      this.pinnedFingerprints.set(keyId, fingerprint);
+    // Carrier-neutral pin scheme: key by `fp:<hex>` of the server's Ed25519
+    // public key. Same key is used regardless of which carrier reached the
+    // server. Migration: a same-fingerprint match against the
+    // legacy `${chatType}:${chatId}` key still validates and is auto-rewritten
+    // under the new scheme.
+    const fpKey = 'fp:' + fingerprint;
+    const pinnedByFp = this.pinnedFingerprints.get(fpKey) ?? null;
+    const pinnedByLegacyPeer = this.pinnedFingerprints.get(keyId) ?? null;
+
+    if (!pinnedByFp && !pinnedByLegacyPeer) {
+      // First connection: TOFU under the fp-key.
+      this.pinnedFingerprints.set(fpKey, fingerprint);
       this.savePinnedFingerprints();
-      console.log(`[controller] TOFU: auto-pinned server key ${keyId} fp=${fingerprint}`);
+      console.log(`[controller] TOFU: auto-pinned server fp=${fingerprint}`);
       this.pushConnectingEvent('Server key pinned (first connect).');
       this.status.keyTrustState = 'trusted';
       this.emitStatus();
       return;
     }
-    if (pinned !== fingerprint) {
+    if (pinnedByFp && pinnedByFp !== fingerprint) {
       this.status.keyTrustState = 'mismatch';
       this.status.lastError =
         `SERVER_KEY_MISMATCH: The server's identity has changed.\n` +
-        `Expected: ${pinned.slice(0, 16)}...\n` +
+        `Expected: ${pinnedByFp.slice(0, 16)}...\n` +
         `Got:      ${fingerprint.slice(0, 16)}...\n\n` +
         `If the server was reinstalled this is expected — use "Clear pins" to reset and reconnect.`;
       this.emitStatus();
       throw new Error('SERVER_KEY_MISMATCH');
     }
+    if (!pinnedByFp && pinnedByLegacyPeer) {
+      // Legacy peer-keyed pin matched. Rewrite under the new fp-key.
+      if (pinnedByLegacyPeer !== fingerprint) {
+        this.status.keyTrustState = 'mismatch';
+        this.status.lastError =
+          `SERVER_KEY_MISMATCH: legacy pin for ${keyId} does not match.`;
+        this.emitStatus();
+        throw new Error('SERVER_KEY_MISMATCH');
+      }
+      this.pinnedFingerprints.set(fpKey, fingerprint);
+      this.savePinnedFingerprints();
+      console.log(`[controller] migrated legacy pin ${keyId} → ${fpKey}`);
+    }
     this.status.keyTrustState = 'trusted';
   }
 
   private serverKeyId(peer: Peer): string {
+    // Retained for legacy-key lookup during migration; new pins use fp keys.
     return `${peer.chatType}:${peer.chatId}`;
   }
 

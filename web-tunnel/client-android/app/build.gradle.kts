@@ -13,8 +13,8 @@ android {
     applicationId = "ai.webtunnel.mobile"
     minSdk = 26
     targetSdk = 35
-    versionCode = 2
-    versionName = "0.2.0"
+    versionCode = 302
+    versionName = "0.2.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -45,16 +45,18 @@ android {
 
   applicationVariants.all {
     val variant = this
+    val versioned = "WebTunnel-Client-Android-v${variant.versionName}.apk"
     variant.outputs.all {
       val out = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-      out.outputFileName = "WebTunnel-Client-Android.apk"
+      out.outputFileName = versioned
     }
   }
 }
 
 tasks.register<Copy>("copyApkToRelease") {
   val variant = "release"
-  from("$buildDir/outputs/apk/$variant/WebTunnel-Client-Android.apk")
+  val name = "WebTunnel-Client-Android-v${android.defaultConfig.versionName}.apk"
+  from("$buildDir/outputs/apk/$variant/$name")
   into(rootProject.file("../release"))
 }
 
@@ -64,11 +66,12 @@ afterEvaluate {
   }
   tasks.named("assembleDebug").configure {
     doLast {
-      val src = file("$buildDir/outputs/apk/debug/WebTunnel-Client-Android.apk")
+      val name = "WebTunnel-Client-Android-v${android.defaultConfig.versionName}.apk"
+      val src = file("$buildDir/outputs/apk/debug/$name")
       if (src.exists()) {
         val destDir = rootProject.file("../release")
         destDir.mkdirs()
-        src.copyTo(File(destDir, "WebTunnel-Client-Android.apk"), overwrite = true)
+        src.copyTo(File(destDir, name), overwrite = true)
       }
     }
   }

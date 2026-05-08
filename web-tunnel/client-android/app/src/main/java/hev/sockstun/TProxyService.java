@@ -47,10 +47,25 @@ public final class TProxyService extends VpnService {
     }
     if (intent != null) {
       startServiceInternal(intent);
+      // REDELIVER_INTENT: if the system kills the :vpn process under memory pressure,
+      // it re-delivers the original CONNECT intent so the TUN can be re-established
+      // without the user re-tapping Start.
+      return START_REDELIVER_INTENT;
+    }
+    // Null intent means the service was restarted by the system after a kill but
+    // we somehow lost our extras. Stay alive in foreground if we still hold a TUN
+    // FD; otherwise let the controller restart us cleanly.
+    if (tunFd != null) {
       return START_STICKY;
     }
     stopSelf();
     return START_NOT_STICKY;
+  }
+
+  @Override
+  public void onTaskRemoved(Intent rootIntent) {
+    // Do NOT stop on swipe-from-recents — the VPN must keep running.
+    super.onTaskRemoved(rootIntent);
   }
 
   @Override
@@ -78,7 +93,7 @@ public final class TProxyService extends VpnService {
     boolean remoteDns = intent.getBooleanExtra(TunnelVpnBridge.EXTRA_REMOTE_DNS, true);
     boolean enableIpv4 = intent.getBooleanExtra(TunnelVpnBridge.EXTRA_ENABLE_IPV4, true);
     boolean enableIpv6 = intent.getBooleanExtra(TunnelVpnBridge.EXTRA_ENABLE_IPV6, true);
-    int mtu = intent.getIntExtra(TunnelVpnBridge.EXTRA_MTU, 8500);
+    int mtu = intent.getIntExtra(TunnelVpnBridge.EXTRA_MTU, 1500);
 
     VpnService.Builder builder = new VpnService.Builder();
     builder.setBlocking(false);

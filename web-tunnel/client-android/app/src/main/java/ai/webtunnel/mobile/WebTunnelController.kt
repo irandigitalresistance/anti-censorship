@@ -26,11 +26,6 @@ enum class LoginStage {
   READY,
 }
 
-enum class Carrier {
-  CHAT,
-  WEBRTC,
-}
-
 data class ChatOption(
   val label: String,
   val chatId: Long,
@@ -40,7 +35,6 @@ data class ChatOption(
 }
 
 data class TunnelStatus(
-  val carrier: Carrier,
   val serverLabel: String,
   val socksPort: Int,
   val startedAt: Long,
@@ -144,7 +138,6 @@ class WebTunnelController(
   // so we can re-issue startTunnel after a drop. userCancelled stops the loop
   // when the user taps Stop.
   private data class StartParams(
-    val carrier: Carrier,
     val selected: ChatOption,
     val socksPort: Int,
   )
@@ -279,7 +272,6 @@ class WebTunnelController(
   }
 
   suspend fun startTunnel(
-    carrier: Carrier,
     selected: ChatOption,
     socksPort: Int,
   ): ControllerState {
@@ -293,13 +285,8 @@ class WebTunnelController(
       emit()
       return snapshot()
     }
-    if (carrier != Carrier.WEBRTC) {
-      state = state.copy(lastError = "Android build currently supports WebRTC only.")
-      emit()
-      return snapshot()
-    }
 
-    lastStartParams = StartParams(carrier, selected, socksPort)
+    lastStartParams = StartParams(selected, socksPort)
     if (!insideReconnect) {
       userCancelled = false
       reconnectJob?.cancel()
@@ -439,11 +426,22 @@ class WebTunnelController(
         metricsJob = metricsJob,
         closeJob = null,
       )
+      // Persist the active target so onResume after a process kill can detect
+      // a ghost VPN and either auto-reconnect or stop the stale TUN cleanly.
+      try {
+        sessionStore.saveLastTunnelTarget(
+          LastTunnelTarget(
+            chatId = selected.chatId,
+            chatType = selected.chatType,
+            label = selected.label,
+            socksPort = boundPort,
+          ),
+        )
+      } catch (_: Throwable) { /* best effort */ }
       val initialMetrics = counters.snapshot()
       state = state.copy(
         connectingEvents = null,
         tunnel = TunnelStatus(
-          carrier = carrier,
           serverLabel = selected.label,
           socksPort = boundPort,
           startedAt = System.currentTimeMillis(),
@@ -500,6 +498,7 @@ class WebTunnelController(
     tearDownRuntime("user stop")
     TunnelVpnBridge.stop(appContext)
     TunnelForegroundService.stop(appContext)
+    try { sessionStore.clearLastTunnelTarget() } catch (_: Throwable) {}
     state = state.copy(
       tunnel = null,
       connectingEvents = null,
@@ -509,6 +508,19 @@ class WebTunnelController(
     emit()
     return snapshot()
   }
+
+  /**
+   * Returns the chat target that was active at the time of the last successful
+   * tunnel start, or null if the user has explicitly stopped or never started.
+   * Used by MainActivity to recover from a "ghost VPN" — when the main process
+   * was killed but the :vpn process kept the TUN alive, leaving the device with
+   * a connected-looking VPN that drops every packet because the SOCKS5 server
+   * (in the main process) is gone.
+   */
+  fun loadLastTunnelTarget(): LastTunnelTarget? = sessionStore.loadLastTunnelTarget()
+
+  /** Drops the saved target without touching any running services. */
+  fun clearLastTunnelTarget() { sessionStore.clearLastTunnelTarget() }
 
   private suspend fun tearDownRuntime(reason: String) {
     val current = runtime
@@ -557,7 +569,7 @@ class WebTunnelController(
           emit()
           insideReconnect = true
           try {
-            startTunnel(params.carrier, params.selected, params.socksPort)
+            startTunnel(params.selected, params.socksPort)
           } finally {
             insideReconnect = false
           }

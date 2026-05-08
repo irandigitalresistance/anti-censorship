@@ -63,6 +63,9 @@ export async function runServerTunnel(
 export interface RunServerTunnelV2Options extends RunServerTunnelOptions, EncodeV2PacketOptions {
   identity: V2ServerIdentity;
   onLogReport?: (report: V2LogReport, tunnelId: string | null) => void;
+  pingIntervalMs?: number;
+  maxMissedPongs?: number;
+  disableHeartbeat?: boolean;
 }
 
 export interface RunServerTunnelV2Result {
@@ -88,6 +91,9 @@ export async function runServerTunnelV2(
     role: 'server',
     compressionThreshold: opts.compressionThreshold,
     minCompressionSavings: opts.minCompressionSavings,
+    pingIntervalMs: opts.pingIntervalMs,
+    maxMissedPongs: opts.maxMissedPongs,
+    disableHeartbeat: opts.disableHeartbeat,
   });
   const metrics: TunnelMetrics = { streamsOpened: 0, bytesUp: 0, bytesDown: 0 };
   mux.onStream((stream) => {

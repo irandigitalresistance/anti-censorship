@@ -23,10 +23,32 @@ interface PerPeerTunnel {
   startedAt: number;
   closed: boolean;
   sessionTag: string | null;
+  seenFrameKeys: string[];
+  seenFrames: Set<string>;
 }
 
 /** Maps meetKey(callId) -> tunnelId for active meet calls so we can update peer after late meet-offer arrives */
 type MeetTunnelEntry = { tunnelId: string; effectivePeer: Peer | null };
+
+export interface BaleServerDispatcherOptions {
+  logger?: (line: string) => void;
+  allowChatTypes?: ReadonlyArray<Peer['chatType']>;
+  baleClient?: BaleClient;
+  livekitFactory?: LivekitRoomFactory;
+  incomingCallSource?: IncomingCallSource;
+  restartIncomingCalls?: () => Promise<void>;
+  zeroTransferTimeoutMs?: number;
+  meetZeroTransferTimeoutMs?: number;
+  protocolVersion?: 1 | 2;
+  identity?: V2ServerIdentity;
+  onLogReport?: (report: V2LogReport, tunnelId: string | null) => void;
+  /** Label prefix for chat-carried tunnels in dashboards/logs. Defaults to `bale`. */
+  chatCarrierLabel?: string;
+  /** Minimum spacing between outbound chat carrier messages. Defaults to no pacing. */
+  chatSendIntervalMs?: number;
+  /** Disable v2 mux heartbeat for slow chat carriers. */
+  chatDisableHeartbeat?: boolean;
+}
 
 /**
  * Dispatches incoming Bale chat messages to a per-peer `Transport`. For each
@@ -98,6 +120,12 @@ export class BaleServerDispatcher {
       identity?: V2ServerIdentity;
       /** Optional server callback for client-uploaded logs. */
       onLogReport?: (report: V2LogReport, tunnelId: string | null) => void;
+      /** Label prefix for chat-carried tunnels in dashboards/logs. Defaults to `bale`. */
+      chatCarrierLabel?: string;
+      /** Minimum spacing between outbound chat carrier messages. Defaults to no pacing. */
+      chatSendIntervalMs?: number;
+      /** Disable v2 mux heartbeat for slow chat carriers. */
+      chatDisableHeartbeat?: boolean;
     } = {},
   ) {}
 
@@ -173,7 +201,7 @@ export class BaleServerDispatcher {
   private async handle(msg: IncomingMessage): Promise<void> {
     const parsed = parseMagic(msg.text!);
     const peer: Peer = { chatId: msg.chat.chatId, chatType: msg.chat.chatType };
-    const key = this.keyFor(peer, parsed.kind === 'frame' ? parsed.sessionTag : null);
+    let key = this.keyFor(peer, parsed.kind === 'frame' ? parsed.sessionTag : null);
 
     this.log(`inbound from ${key}: kind=${parsed.kind}`);
 
@@ -214,10 +242,28 @@ export class BaleServerDispatcher {
     }
 
     let pt = this.tunnels.get(key);
+    if (!pt && peer.chatId === 0 && parsed.sessionTag) {
+      const suffix = `:${parsed.sessionTag}`;
+      const matches = Array.from(this.tunnels.entries()).filter(([candidateKey, candidate]) => {
+        return !candidate.closed && candidateKey.endsWith(suffix);
+      });
+      if (matches.length === 1) {
+        [key, pt] = matches[0]!;
+      }
+    }
+    if (!pt && peer.chatId === 0) {
+      this.log(`ignored frame with unknown peer and no matching active sessionTag=${parsed.sessionTag ?? '-'}`);
+      return;
+    }
     const isNew = !pt;
     if (!pt) {
       pt = this.spawnTunnel(peer, parsed.sessionTag);
       this.tunnels.set(key, pt);
+    }
+    const frameKey = keyForFrame(parsed.protocolVersion, parsed.sessionTag, parsed.body);
+    if (rememberFrame(pt, frameKey)) {
+      this.log(`ignored duplicate frame for ${key}`);
+      return;
     }
     this.log(`deliver ${parsed.body.byteLength}B to ${key} (new=${isNew})`);
     pt.transport.deliver(parsed.body);
@@ -320,6 +366,7 @@ export class BaleServerDispatcher {
           identity: requireV2Identity(this.opts.identity),
           handle: trackedHandle,
           onLogReport: this.opts.onLogReport,
+          disableHeartbeat: this.opts.chatDisableHeartbeat,
         }).then((res) => res.mux)
       : runServerTunnel(transport, this.psk, { handle: trackedHandle });
 
@@ -473,23 +520,42 @@ export class BaleServerDispatcher {
 
   private spawnTunnel(peer: Peer, sessionTag: string | null): PerPeerTunnel {
     const key = this.keyFor(peer, sessionTag);
+    const chatCarrier = this.opts.chatCarrierLabel ?? 'bale';
     const label = sessionTag
-      ? `bale:${peer.chatType.toLowerCase()}/${peer.chatId}#${sessionTag.slice(0, 8)}`
-      : `bale:${peer.chatType.toLowerCase()}/${peer.chatId}`;
+      ? `${chatCarrier}:${peer.chatType.toLowerCase()}/${peer.chatId}#${sessionTag.slice(0, 8)}`
+      : `${chatCarrier}:${peer.chatType.toLowerCase()}/${peer.chatId}`;
     const { handle, close: closeMgr } = this.manager.openTunnel(label, {
       carrier: 'chat',
       peer: toTunnelPeer(peer),
       protocolVersion: this.protocolVersion(),
     });
+    const sendIntervalMs = Math.max(0, this.opts.chatSendIntervalMs ?? 0);
+    let lastSendAt = 0;
+    let sendQueue: Promise<void> = Promise.resolve();
     const transport = createPassiveTransport({
       send: async (bytes) => {
-        const payload = this.protocolVersion() === 2
-          ? buildFrameMessageV2(bytes, sessionTag)
-          : buildFrameMessage(bytes, sessionTag);
-        await this.sidecar.sendMessage(peer, payload);
+        sendQueue = sendQueue.then(async () => {
+          if (sendIntervalMs > 0) {
+            const waitMs = Math.max(0, lastSendAt + sendIntervalMs - Date.now());
+            if (waitMs > 0) await delay(waitMs);
+          }
+          const payload = this.protocolVersion() === 2
+            ? buildFrameMessageV2(bytes, sessionTag)
+            : buildFrameMessage(bytes, sessionTag);
+          await this.sidecar.sendMessage(peer, payload);
+          lastSendAt = Date.now();
+        });
+        await sendQueue;
       },
     });
-    const pt: PerPeerTunnel = { transport, startedAt: Date.now(), closed: false, sessionTag };
+    const pt: PerPeerTunnel = {
+      transport,
+      startedAt: Date.now(),
+      closed: false,
+      sessionTag,
+      seenFrameKeys: [],
+      seenFrames: new Set<string>(),
+    };
     let totalTransferred = 0;
     const chatTimeout = this.chatIdleTimeoutMs();
     let idleTimer = this.armIdleTimeout(chatTimeout, () => {
@@ -590,6 +656,21 @@ function delay(ms: number): Promise<void> {
 function clearTimer(timer: ReturnType<typeof setTimeout> | null): null {
   if (timer) clearTimeout(timer);
   return null;
+}
+
+function rememberFrame(tunnel: PerPeerTunnel, key: string): boolean {
+  if (tunnel.seenFrames.has(key)) return true;
+  tunnel.seenFrames.add(key);
+  tunnel.seenFrameKeys.push(key);
+  if (tunnel.seenFrameKeys.length > 128) {
+    const old = tunnel.seenFrameKeys.shift();
+    if (old) tunnel.seenFrames.delete(old);
+  }
+  return false;
+}
+
+function keyForFrame(protocolVersion: 1 | 2, sessionTag: string | null, body: Uint8Array): string {
+  return `${protocolVersion}:${sessionTag ?? ''}:${Array.from(body).join(',')}`;
 }
 
 interface PassiveTransport extends Transport {

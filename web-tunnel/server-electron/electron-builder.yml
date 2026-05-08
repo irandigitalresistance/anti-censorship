@@ -23,7 +23,7 @@ win:
     - target: portable
       arch:
         - x64
-  artifactName: "WebTunnel-Server.${ext}"
+  artifactName: "WebTunnel-Server-0.3-beta.${ext}"
   signAndEditExecutable: false
 mac:
   target:
@@ -33,4 +33,4 @@ mac:
   artifactName: "WebTunnel-Server-mac.${ext}"
   identity: null
 portable:
-  artifactName: "WebTunnel-Server.${ext}"
+  artifactName: "WebTunnel-Server-0.3-beta.${ext}"
