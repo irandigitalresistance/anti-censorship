@@ -135,7 +135,6 @@ describe('latest electron server/client with mock webrtc', () => {
 
       const socksPort = await freePort();
       await client.startTunnel({
-        carrier: 'webrtc',
         peer: { chatId: 500, chatType: 'PRIVATE' },
         password: 'secret',
         socksPort,

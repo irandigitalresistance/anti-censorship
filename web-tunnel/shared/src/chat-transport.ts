@@ -15,8 +15,8 @@ export interface ChatTransportOptions {
   sessionTag?: string;
   /**
    * Optional: called when an inbound chat-audit message arrives from the peer
-   * (anything that isn't a `__WT_FRAME__` envelope). Useful for the dashboard's
-   * chat-audit pane. If unset, non-frame chat messages are dropped.
+   * (anything that isn't a `__WT_FRAME__` envelope). If unset, non-frame chat
+   * messages are dropped.
    */
   onChat?: (text: string) => void;
 }
@@ -41,10 +41,7 @@ export function makeChatTransport(opts: ChatTransportOptions): Transport {
     }
     if (parsed.kind === 'chat') {
       onChat?.(parsed.text);
-      return;
     }
-    // REQ / OK / DENY are approval-gate signals; the chat-transport byte pipe
-    // does not handle them — the approval layer above does.
   });
   const offClose = sidecar.onClose((reason) => {
     if (closed) return;

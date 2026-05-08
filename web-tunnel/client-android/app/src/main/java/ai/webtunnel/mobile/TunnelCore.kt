@@ -1,6 +1,7 @@
 package ai.webtunnel.mobile
 
 import android.content.Context
+import android.util.Log
 import io.livekit.android.LiveKit
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
@@ -391,7 +392,15 @@ class LiveKitTransport(
   private val receiveJob: Job = scope.launch(Dispatchers.IO) {
     for (bytes in receiveQueue) {
       if (closed.get()) continue
-      onMessageHandler?.invoke(bytes)
+      // Belt-and-suspenders: any throw in onMessageHandler used to escape
+      // this coroutine, hit the default uncaught-exception handler, and
+      // kill the main process. Even with the call sites fixed we never
+      // want a downstream callback bug to take down the whole tunnel.
+      try {
+        onMessageHandler?.invoke(bytes)
+      } catch (error: Throwable) {
+        Log.w("WebTunnel", "transport receive callback threw: ${error.javaClass.simpleName}: ${error.message}")
+      }
     }
   }
   private val sendJob: Job = scope.launch(Dispatchers.IO) {
@@ -555,9 +564,25 @@ class Socks5Server(
         openedStream.onData { data ->
           onDownload?.invoke(addr, data.size)
           onEvent?.invoke("SOCKS down ${data.size}B from ${addr.host}:${addr.port}")
-          synchronized(output) {
-            output.write(data)
-            output.flush()
+          // The SOCKS5 client (hev-socks5-tunnel via the TUN, or any local
+          // app pointed at 127.0.0.1:1080) can close its half of the socket
+          // at any time — half-open shutdown, RST, the device app dropping
+          // the connection. If we let SocketException ("Broken pipe" /
+          // "Connection reset") propagate out of this callback it bubbles up
+          // through TunnelMuxV2.handleWire → LiveKitTransport.receiveJob and
+          // ends up in the JVM's uncaught-exception handler, which kills the
+          // entire main process and leaves a ghost VPN behind. Catch and
+          // tear down the local socket + stream cleanly instead.
+          try {
+            synchronized(output) {
+              output.write(data)
+              output.flush()
+            }
+          } catch (e: Throwable) {
+            onEvent?.invoke("SOCKS write failed (${e.javaClass.simpleName}: ${e.message}) ${addr.host}:${addr.port}")
+            try { openedStream.close() } catch (_: Throwable) {}
+            try { sock.close() } catch (_: Throwable) {}
+            notifyStreamClosed()
           }
         }
         openedStream.onClose {

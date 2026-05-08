@@ -1,0 +1,610 @@
+{
+  "target": "www.google.com:443",
+  "blocked_sni": "www.twitter.com",
+  "clean_sni": "www.google.com",
+  "ts": 1777506965.6853795,
+  "experiments": {
+    "e1_case_sensitivity": {
+      "lower": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 370.82815170288086
+      },
+      "upper": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 407.76777267456055
+      },
+      "title": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 330.13439178466797
+      },
+      "mixed": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 317.6918029785156
+      }
+    },
+    "e2_tcp_reassembly_window": {
+      "0": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 451.02739334106445
+      },
+      "5": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 461.4236354827881
+      },
+      "20": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 465.46101570129395
+      },
+      "50": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 467.32187271118164
+      },
+      "100": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 471.82226181030273
+      },
+      "250": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 468.0612087249756
+      },
+      "500": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 730.9579849243164
+      },
+      "1000": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 1208.7185382843018
+      },
+      "2000": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 2214.4839763641357
+      },
+      "5000": {
+        "verdict": "timeout",
+        "verdicts": [
+          "timeout",
+          "timeout",
+          "timeout",
+          "timeout",
+          "timeout"
+        ],
+        "median_ms": 5218.653202056885
+      }
+    },
+    "e3_buffer_depth": {
+      "0": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 333.42981338500977
+      },
+      "256": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 332.4856758117676
+      },
+      "512": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 338.2759094238281
+      },
+      "1024": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 342.43178367614746
+      },
+      "1500": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 341.63641929626465
+      },
+      "2048": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 466.8087959289551
+      },
+      "3072": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 492.1152591705322
+      },
+      "4096": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 478.08241844177246
+      },
+      "6144": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 483.6254119873047
+      },
+      "8192": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 487.2474670410156
+      },
+      "12288": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 6005.4380893707275
+      },
+      "16384": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 6013.084173202515
+      }
+    },
+    "e4_length_field": {
+      "-2": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 335.99209785461426
+      },
+      "-1": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 333.6660861968994
+      },
+      "0": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 316.4796829223633
+      },
+      "1": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 333.2700729370117
+      },
+      "2": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 396.2700366973877
+      }
+    },
+    "e5_duplicate_sni": {
+      "blocked_first": {
+        "verdict": "tls_alert",
+        "verdicts": [
+          "tls_alert",
+          "tls_alert",
+          "tls_alert",
+          "tls_alert",
+          "tls_alert"
+        ],
+        "median_ms": 407.55653381347656
+      },
+      "clean_first": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 326.8270492553711
+      },
+      "two_blocked": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 323.32682609558105
+      },
+      "two_clean": {
+        "verdict": "tls_alert",
+        "verdicts": [
+          "tls_alert",
+          "tls_alert",
+          "tls_alert",
+          "tls_alert",
+          "tls_alert"
+        ],
+        "median_ms": 408.39123725891113
+      }
+    },
+    "e6_racing_budget": {
+      "samples": [
+        311.3827705383301,
+        313.54832649230957,
+        315.84763526916504,
+        317.7003860473633,
+        318.3145523071289,
+        321.4747905731201,
+        322.9408264160156,
+        323.9731788635254,
+        327.7153968811035,
+        327.9092311859131,
+        328.0630111694336,
+        331.10666275024414,
+        337.5895023345947,
+        343.4877395629883,
+        346.9970226287842,
+        350.14891624450684,
+        355.20005226135254,
+        359.70282554626465,
+        2406.7203998565674,
+        2433.81404876709
+      ],
+      "p50_ms": 328.0630111694336,
+      "p90_ms": 2406.7203998565674
+    },
+    "e7_ip_level_block": {
+      "twitter.com": {
+        "verdict": "rst",
+        "ms": 2443.5458183288574,
+        "raw": [
+          [
+            "rst",
+            2464.8361206054688
+          ],
+          [
+            "rst",
+            2418.1227684020996
+          ],
+          [
+            "rst",
+            2443.5458183288574
+          ]
+        ]
+      },
+      "x.com": {
+        "verdict": "rst",
+        "ms": 2442.9049491882324,
+        "raw": [
+          [
+            "rst",
+            2442.9049491882324
+          ],
+          [
+            "rst",
+            2434.4916343688965
+          ],
+          [
+            "rst",
+            2497.51353263855
+          ]
+        ]
+      },
+      "www.facebook.com": {
+        "verdict": "timeout",
+        "ms": 2528.1929969787598,
+        "raw": [
+          [
+            "timeout",
+            2591.96400642395
+          ],
+          [
+            "timeout",
+            2528.1929969787598
+          ],
+          [
+            "rst",
+            2412.2979640960693
+          ]
+        ]
+      },
+      "www.instagram.com": {
+        "verdict": "rst",
+        "ms": 2431.2527179718018,
+        "raw": [
+          [
+            "timeout",
+            2509.3345642089844
+          ],
+          [
+            "rst",
+            2397.642135620117
+          ],
+          [
+            "rst",
+            2431.2527179718018
+          ]
+        ]
+      },
+      "web.telegram.org": {
+        "verdict": "rst",
+        "ms": 2464.585542678833,
+        "raw": [
+          [
+            "timeout",
+            2557.600259780884
+          ],
+          [
+            "rst",
+            2464.585542678833
+          ],
+          [
+            "rst",
+            2405.225992202759
+          ]
+        ]
+      },
+      "www.youtube.com": {
+        "verdict": "rst",
+        "ms": 2444.3674087524414,
+        "raw": [
+          [
+            "timeout",
+            2527.606248855591
+          ],
+          [
+            "rst",
+            2444.3674087524414
+          ],
+          [
+            "rst",
+            2426.802635192871
+          ]
+        ]
+      },
+      "www.google.com": {
+        "verdict": "server_hello",
+        "ms": 508.5408687591553,
+        "raw": [
+          [
+            "server_hello",
+            528.9249420166016
+          ],
+          [
+            "server_hello",
+            447.2200870513916
+          ],
+          [
+            "server_hello",
+            508.5408687591553
+          ]
+        ]
+      },
+      "www.cloudflare.com": {
+        "verdict": "rst",
+        "ms": 6003.911018371582,
+        "raw": [
+          [
+            "rst",
+            6001.3275146484375
+          ],
+          [
+            "rst",
+            6003.911018371582
+          ],
+          [
+            "rst",
+            6008.443355560303
+          ]
+        ]
+      }
+    },
+    "e8_re_classification": {
+      "clean_then_blocked_separate_tcp": {
+        "verdict": "server_hello",
+        "verdicts": [
+          "server_hello",
+          "server_hello",
+          "server_hello",
+          "server_hello",
+          "server_hello"
+        ],
+        "median_ms": 427.08778381347656
+      },
+      "blocked_then_clean_separate_tcp": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 347.2318649291992
+      },
+      "clean_then_blocked_one_tcp": {
+        "verdict": "rst",
+        "verdicts": [
+          "rst",
+          "rst",
+          "rst",
+          "rst",
+          "rst"
+        ],
+        "median_ms": 6000.887393951416
+      }
+    }
+  }
+}

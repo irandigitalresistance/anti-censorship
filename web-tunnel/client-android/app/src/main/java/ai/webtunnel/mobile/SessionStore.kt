@@ -11,9 +11,17 @@ data class BaleSession(
   val userAccessHash: Long,
 )
 
+data class LastTunnelTarget(
+  val chatId: Long,
+  val chatType: String,
+  val label: String,
+  val socksPort: Int,
+)
+
 class SessionStore(context: Context) {
   private val file = File(context.filesDir, "bale-session.json")
   private val keyPinsFile = File(context.filesDir, "server-key-pins.json")
+  private val lastTargetFile = File(context.filesDir, "last-tunnel-target.json")
 
   fun load(): BaleSession? {
     if (!file.exists()) return null
@@ -86,5 +94,39 @@ class SessionStore(context: Context) {
       if (value.isNotBlank()) raw.put(key, value)
     }
     keyPinsFile.writeText(raw.toString())
+  }
+
+  /**
+   * Persisted on every successful tunnel start so we can detect the
+   * "ghost VPN" state — main process was killed but the :vpn process
+   * is still holding the TUN — and auto-reconnect the tunnel cleanly
+   * on app re-open. Cleared on user-initiated stop.
+   */
+  fun saveLastTunnelTarget(target: LastTunnelTarget) {
+    val raw = JSONObject()
+      .put("chatId", target.chatId.toString())
+      .put("chatType", target.chatType)
+      .put("label", target.label)
+      .put("socksPort", target.socksPort)
+    lastTargetFile.writeText(raw.toString())
+  }
+
+  fun loadLastTunnelTarget(): LastTunnelTarget? {
+    if (!lastTargetFile.exists()) return null
+    return try {
+      val raw = JSONObject(lastTargetFile.readText())
+      LastTunnelTarget(
+        chatId = raw.getString("chatId").toLong(),
+        chatType = raw.getString("chatType"),
+        label = raw.optString("label").ifBlank { "server" },
+        socksPort = raw.optInt("socksPort", 1080),
+      )
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  fun clearLastTunnelTarget() {
+    if (lastTargetFile.exists()) lastTargetFile.delete()
   }
 }

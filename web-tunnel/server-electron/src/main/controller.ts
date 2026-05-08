@@ -696,7 +696,7 @@ export class ServerController extends EventEmitter {
       try {
         this.crashStore.add({
           source: 'server-electron',
-          appVersion: '0.2.0',
+          appVersion: '0.3-beta',
           occurredAt: Date.now(),
           kind,
           message,

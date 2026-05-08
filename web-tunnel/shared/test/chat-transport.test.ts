@@ -13,7 +13,6 @@ describe('ChatTransport over MockBalBus', () => {
     const serverT = makeChatTransport({ sidecar: server, peer: { chatId: 200, chatType: 'PRIVATE' } });
     const clientT = makeChatTransport({ sidecar: client, peer: { chatId: 100, chatType: 'PRIVATE' } });
 
-    // Wire up a simple echo on the server side using TunnelMux
     const psk = new Uint8Array(32);
     const cipher = SessionCipher.derive(psk, new Uint8Array(16), new Uint8Array(16));
     const sMux = new TunnelMux({ transport: serverT, cipher, role: 'server' });
@@ -50,7 +49,6 @@ describe('ChatTransport over MockBalBus', () => {
     aT.onMessage((b) => byteSeen.push(b));
 
     await b.sendMessage({ chatId: 1, chatType: 'PRIVATE' }, 'just a regular human message');
-    await new Promise<void>((r) => queueMicrotask(() => r()));
     await new Promise<void>((r) => setTimeout(r, 5));
 
     expect(auditSeen).toEqual(['just a regular human message']);
@@ -69,7 +67,6 @@ describe('ChatTransport over MockBalBus', () => {
       peer: { chatId: 2, chatType: 'PRIVATE' },
       onChat: (t) => audits.push(t),
     });
-    // Force the transport to exist
     aT.onMessage(() => undefined);
 
     await b.sendMessage({ chatId: 1, chatType: 'PRIVATE' }, 'from b');
@@ -78,4 +75,5 @@ describe('ChatTransport over MockBalBus', () => {
 
     expect(audits).toEqual(['from b']);
   });
+
 });

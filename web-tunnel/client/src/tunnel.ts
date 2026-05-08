@@ -17,6 +17,9 @@ export interface RunClientTunnelV2Options extends EncodeV2PacketOptions {
   onServerIdentity?: (info: { publicKey: Uint8Array; fingerprint: string }) => Promise<void> | void;
   /** Optional client identity (clientType, clientVersion) advertised in the v2 hello. */
   metadata?: V2ClientMetadata;
+  pingIntervalMs?: number;
+  maxMissedPongs?: number;
+  disableHeartbeat?: boolean;
 }
 
 export interface RunClientTunnelV2Result {
@@ -40,6 +43,9 @@ export async function runClientTunnelV2(
     role: 'client',
     compressionThreshold: opts.compressionThreshold,
     minCompressionSavings: opts.minCompressionSavings,
+    pingIntervalMs: opts.pingIntervalMs,
+    maxMissedPongs: opts.maxMissedPongs,
+    disableHeartbeat: opts.disableHeartbeat,
   });
   return {
     mux,

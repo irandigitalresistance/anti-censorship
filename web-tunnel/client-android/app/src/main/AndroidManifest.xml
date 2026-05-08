@@ -3,11 +3,10 @@
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
   <uses-permission
       android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
-      android:minSdkVersion="34" />
-  <uses-permission
-      android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"
       android:minSdkVersion="34" />
   <application
       android:name=".WebTunnelApp"
@@ -27,7 +26,11 @@
     <service
         android:name=".TunnelForegroundService"
         android:exported="false"
-        android:foregroundServiceType="dataSync" />
+        android:foregroundServiceType="specialUse">
+      <property
+          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+          android:value="VPN tunnel host process" />
+    </service>
     <service
         android:name="hev.sockstun.TProxyService"
         android:exported="true"

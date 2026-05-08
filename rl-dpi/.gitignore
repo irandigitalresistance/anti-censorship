@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+*.log
+*.pid
+rlagent/runs/
+rlagent/checkpoints/
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.log
+paper/*.out
+paper/*.pdf
+*.tar
+docker-compose.override.yml

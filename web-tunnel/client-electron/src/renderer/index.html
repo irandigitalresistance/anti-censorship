@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
-    <title>Web Tunnel v0.2</title>
+    <title>Web Tunnel v0.3-beta</title>
     <style>
       :root {
         --bg: #0e0f12;
@@ -86,7 +86,7 @@
   </head>
   <body>
     <header>
-      <h1>web-tunnel v0.2</h1>
+      <h1>web-tunnel v0.3-beta</h1>
       <div id="me" class="me">not logged in</div>
       <button id="open-log" class="btn" title="open debug log">Open log</button>
       <button id="send-logs" class="btn" title="upload recent logs to server">Send logs</button>
@@ -156,18 +156,6 @@
 
       <div id="picker" class="card" style="display:none;">
         <h2>Start a tunnel</h2>
-
-        <label>Carrier</label>
-        <div id="carrier-switch" style="display:flex; gap:18px; margin-bottom:10px; align-items:center;">
-          <label style="display:inline-flex; align-items:center; gap:6px; width:auto; color:var(--text); text-transform:none; letter-spacing:0; font-size:12px; margin:0;">
-            <input type="radio" name="carrier" value="webrtc" id="carrier-webrtc" checked style="width:auto; margin:0;" />
-            <span>WebRTC (LiveKit) <span class="muted" style="font-size:11px;" id="webrtc-hint">- fast, default</span></span>
-          </label>
-          <label style="display:inline-flex; align-items:center; gap:6px; width:auto; color:var(--text); text-transform:none; letter-spacing:0; font-size:12px; margin:0;">
-            <input type="radio" name="carrier" value="chat" id="carrier-chat" style="width:auto; margin:0;" />
-            <span>Chat (Bale messages) <span class="muted" style="font-size:11px;">- fallback</span></span>
-          </label>
-        </div>
 
         <label for="peer-select">Server's Bale account</label>
         <select id="peer-select"><option value="">- loading contacts -</option></select>
@@ -307,9 +295,8 @@
 
         if (status.tunnel) {
           startedAt = status.tunnel.startedAt;
-          const carrierLabel = status.tunnel.carrier === 'webrtc' ? 'WebRTC' : 'Chat';
-          const server = status.tunnel.serverLabel || (status.tunnel.carrier === 'webrtc' ? 'livekit-room' : ('chat ' + status.tunnel.peer.chatId));
-          $('k-server').textContent = server + ' (' + carrierLabel + ')';
+          const server = status.tunnel.serverLabel || 'livekit-room';
+          $('k-server').textContent = server + ' (WebRTC)';
           $('k-socks').textContent = '127.0.0.1:' + status.tunnel.socksPort;
           $('socks-hint').textContent = status.tunnel.socksPort;
           $('k-streams').textContent = status.tunnel.streamsActive + ' / ' + status.tunnel.streamsOpened;
@@ -359,11 +346,6 @@
         } catch (e) {
           $('peer-select').innerHTML = '<option value="">error: ' + e.message + '</option>';
         }
-      }
-
-      function selectedCarrier() {
-        const r = document.querySelector('input[name="carrier"]:checked');
-        return r ? r.value : 'webrtc';
       }
 
       $('send-code').addEventListener('click', async () => {
@@ -417,7 +399,7 @@
       });
 
       $('start').addEventListener('click', async () => {
-        const carrier = selectedCarrier();
+        const carrier = 'webrtc';
         const socksPort = Number($('socks-port').value);
         const sel = $('peer-select');
         if (!sel.value) {
@@ -578,16 +560,6 @@
           singBoxAvailable = !!caps.singBoxAvailable;
           renderSystemTunnel('off', null);
           renderLanShare('off', null, null);
-          const rb = $('carrier-webrtc');
-          const hint = $('webrtc-hint');
-          if (!caps.hasWebrtc) {
-            rb.disabled = true;
-            hint.textContent = '- available after Bale login';
-            if (rb.checked) { $('carrier-chat').checked = true; }
-          } else {
-            rb.disabled = false;
-            hint.textContent = '- fast, default';
-          }
         } catch {
           // ignore
         }

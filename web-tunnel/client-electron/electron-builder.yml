@@ -39,7 +39,7 @@ win:
     - target: portable
       arch:
         - x64
-  artifactName: "WebTunnel-Client.${ext}"
+  artifactName: "WebTunnel-Client-0.3-beta.${ext}"
   signAndEditExecutable: false
 portable:
-  artifactName: "WebTunnel-Client.${ext}"
+  artifactName: "WebTunnel-Client-0.3-beta.${ext}"

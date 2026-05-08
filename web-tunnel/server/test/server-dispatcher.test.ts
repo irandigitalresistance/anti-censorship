@@ -36,6 +36,18 @@ async function openClient(bus: MockBalBus, myId: number, serverId: number, psk: 
   return { client, mux };
 }
 
+function joinChunks(chunks: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const c of chunks) total += c.byteLength;
+  const buf = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    buf.set(c, offset);
+    offset += c.byteLength;
+  }
+  return buf;
+}
+
 describe('BaleServerDispatcher', () => {
   const cleanups: Array<() => Promise<void> | void> = [];
   afterEach(async () => {
@@ -63,14 +75,7 @@ describe('BaleServerDispatcher', () => {
       const chunks: Uint8Array[] = [];
       s.onData((d) => chunks.push(d));
       s.onClose(() => {
-        let total = 0;
-        for (const c of chunks) total += c.byteLength;
-        const buf = new Uint8Array(total);
-        let o = 0;
-        for (const c of chunks) {
-          buf.set(c, o);
-          o += c.byteLength;
-        }
+        const buf = joinChunks(chunks);
         resolve(new TextDecoder().decode(buf));
       });
       s.write(new TextEncoder().encode('GET /hi HTTP/1.1\r\nHost: target\r\nConnection: close\r\n\r\n'));
@@ -98,23 +103,13 @@ describe('BaleServerDispatcher', () => {
 
     const [c1, c2] = await Promise.all([openClient(bus, 601, 500, psk), openClient(bus, 602, 500, psk)]);
 
-    async function fetchVia(mux: TunnelMux, path: string): Promise<string> {
+    async function fetchVia(mux: TunnelMux, route: string): Promise<string> {
       return new Promise((resolve, reject) => {
         const s = mux.openStream({ kind: 'ipv4', host: '127.0.0.1', port: target.port });
         const chunks: Uint8Array[] = [];
         s.onData((d) => chunks.push(d));
-        s.onClose(() => {
-          let total = 0;
-          for (const c of chunks) total += c.byteLength;
-          const buf = new Uint8Array(total);
-          let o = 0;
-          for (const c of chunks) {
-            buf.set(c, o);
-            o += c.byteLength;
-          }
-          resolve(new TextDecoder().decode(buf));
-        });
-        s.write(new TextEncoder().encode(`GET ${path} HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n`));
+        s.onClose(() => resolve(new TextDecoder().decode(joinChunks(chunks))));
+        s.write(new TextEncoder().encode(`GET ${route} HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n`));
         setTimeout(() => reject(new Error('timeout')), 3000);
       });
     }
@@ -139,15 +134,13 @@ describe('BaleServerDispatcher', () => {
 
     const client = new MockSidecar(bus, { id: 700, name: 'bad' });
     const transport = makeChatTransport({ sidecar: client, peer: { chatId: 500, chatType: 'PRIVATE' } });
-    // Server silently drops the handshake on MAC mismatch (no DENY yet — v2),
-    // so the client hangs waiting for OK. We expect the handshake NOT to
-    // complete within a short window. The dispatcher should have 0 tunnels.
     const racer = Promise.race([
       clientHandshake(transport, wrongPsk).then(() => 'completed').catch((e) => 'rejected:' + e.message),
       new Promise<string>((r) => setTimeout(() => r('timeout'), 300)),
     ]);
     const result = await racer;
     expect(result).toBe('timeout');
+    await new Promise((r) => setTimeout(r, 50));
     expect(manager.snapshot().length).toBe(0);
   }, 5000);
 

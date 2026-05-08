@@ -1,7 +1,14 @@
 package ai.webtunnel.mobile
 
+import android.app.ActivityManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.text.format.Formatter
 import android.view.Menu
 import android.view.MenuItem
@@ -17,14 +24,12 @@ import kotlinx.coroutines.launch
 
 private data class AutoStartConfig(
   val enabled: Boolean,
-  val carrier: Carrier,
   val peerLabel: String?,
   val peerId: Long?,
   val socksPort: Int,
 )
 
 private data class StartTunnelRequest(
-  val carrier: Carrier,
   val selected: ChatOption,
   val socksPort: Int,
 )
@@ -39,7 +44,6 @@ class MainActivity : AppCompatActivity() {
   private lateinit var controller: WebTunnelController
   private lateinit var chatAdapter: ArrayAdapter<ChatOption>
   private var uiState: ControllerState = ControllerState()
-  private var selectedCarrier: Carrier = Carrier.WEBRTC
   private var autoStartConfig: AutoStartConfig? = null
   private var autoStartConsumed = false
   private var pendingTunnelRequest: StartTunnelRequest? = null
@@ -81,6 +85,11 @@ class MainActivity : AppCompatActivity() {
         syncAdapters(state.chats)
         render(state)
         maybeApplyAutoStart(state)
+        // The bootstrap path sets loginStage=READY asynchronously after a fresh
+        // process — at onResume time it's still UNAUTHENTICATED, so the resume
+        // call below skips. Re-check here every time state changes so the
+        // recovery fires once the controller is actually ready.
+        maybeRecoverGhostVpn(state)
       }
     }
 
@@ -103,6 +112,92 @@ class MainActivity : AppCompatActivity() {
         val tunnel = uiState.tunnel ?: continue
         binding.kSince.text = formatDuration(System.currentTimeMillis() - tunnel.startedAt)
       }
+    }
+  }
+
+  override fun onResume() {
+    super.onResume()
+    // The controller lives in the application scope, so it survives Activity
+    // recreation and even some forms of process kill (when the foreground service
+    // keeps the main process alive). Pull the live state on every resume so the
+    // UI accurately reflects whether the tunnel is still up.
+    val live = controller.currentState()
+    uiState = live
+    syncAdapters(live.chats)
+    render(live)
+    maybeRecoverGhostVpn(live)
+  }
+
+  /**
+   * Detect and recover from a "ghost VPN" — the :vpn process kept the TUN
+   * alive after the main process was killed by Android (Doze, OEM background
+   * killer, low memory). Symptom: VPN icon stays in the status bar but no
+   * traffic flows because the SOCKS5 server (in the main process) is gone,
+   * and reopening the app shows the Start-tunnel page even though the
+   * system thinks a VPN is connected.
+   *
+   * When detected, attempt to auto-reconnect to the last known target. If the
+   * target is missing or the reconnect fails, stop the stale VPN cleanly so
+   * the user sees a clean Start-tunnel page and a clear error.
+   */
+  private var ghostRecoveryAttempted = false
+
+  private fun maybeRecoverGhostVpn(state: ControllerState) {
+    if (ghostRecoveryAttempted) return
+    if (state.tunnel != null) return
+    if (state.connectingEvents != null) return // already reconnecting
+    if (state.loginStage != LoginStage.READY) return
+    if (!isOurVpnServiceAlive()) return
+    ghostRecoveryAttempted = true
+    val saved = controller.loadLastTunnelTarget()
+    if (saved == null) {
+      // VPN is up but we don't know what to reconnect to — stop it so the
+      // user gets a clean state.
+      TunnelVpnBridge.stop(applicationContext)
+      TunnelForegroundService.stop(applicationContext)
+      render(state.copy(lastError = "VPN was running without a saved target — stopped. Tap Start tunnel to reconnect."))
+      return
+    }
+    // Stop the stale TUN and immediately re-establish via the normal start
+    // flow. The VPN consent prompt has already been granted in this session
+    // (the system remembers per-app), so this is silent.
+    TunnelVpnBridge.stop(applicationContext)
+    TunnelForegroundService.stop(applicationContext)
+    val matching = state.chats.firstOrNull {
+      it.chatId == saved.chatId && it.chatType == saved.chatType
+    } ?: ChatOption(label = saved.label, chatId = saved.chatId, chatType = saved.chatType)
+    render(state.copy(connectingEvents = listOf("Reconnecting tunnel to ${matching.label} after process restart…")))
+    ensureVpnPermissionAndStart(
+      StartTunnelRequest(selected = matching, socksPort = saved.socksPort),
+    )
+  }
+
+  private fun isOurVpnServiceAlive(): Boolean {
+    return try {
+      val mgr = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+      // getRunningServices is intentionally restricted on modern Android to
+      // only return the caller's own services — which is exactly what we want.
+      @Suppress("DEPRECATION")
+      mgr.getRunningServices(Int.MAX_VALUE).any {
+        it.service.className == "hev.sockstun.TProxyService"
+      }
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  private fun maybeRequestBatteryOptimizationExemption() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+    if (pm.isIgnoringBatteryOptimizations(packageName)) return
+    try {
+      @Suppress("BatteryLife")
+      val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+        .setData(Uri.parse("package:$packageName"))
+      startActivity(intent)
+    } catch (_: Throwable) {
+      // some OEMs hide this — fall back to a no-op; user can still grant
+      // manually via Settings.
     }
   }
 
@@ -197,8 +292,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // Sign-out and Open log moved into the toolbar overflow menu — wired in
-    // onOptionsItemSelected. The chat/webrtc carrier radio is hidden on
-    // Android (WebRTC only) so we don't bind those listeners anymore.
+    // onOptionsItemSelected.
 
     binding.start.setOnClickListener {
       val socksPort = binding.socksPort.text?.toString()?.toIntOrNull() ?: 1080
@@ -209,7 +303,6 @@ class MainActivity : AppCompatActivity() {
       }
       ensureVpnPermissionAndStart(
         StartTunnelRequest(
-          carrier = selectedCarrier,
           selected = selected,
           socksPort = socksPort,
         ),
@@ -300,10 +393,6 @@ class MainActivity : AppCompatActivity() {
     binding.codePhoneDisplay.text = state.pendingPhone ?: "-"
     binding.pwPhoneDisplay.text = state.pendingPhone ?: "-"
 
-    // Carrier is always WebRTC on Android (chat carrier hidden in v0.2 layout).
-    selectedCarrier = Carrier.WEBRTC
-    binding.carrierWebrtc.isChecked = true
-
     val busy = state.busy
     binding.sendCode.isEnabled = !busy
     binding.verifyCode.isEnabled = !busy
@@ -327,7 +416,6 @@ class MainActivity : AppCompatActivity() {
     val extras = intent.extras ?: return null
     if (
       !extras.containsKey("wt_autostart")
-      && !extras.containsKey("wt_carrier")
       && !extras.containsKey("wt_peer_label")
       && !extras.containsKey("wt_peer_id")
       && !extras.containsKey("wt_socks_port")
@@ -335,10 +423,6 @@ class MainActivity : AppCompatActivity() {
       return null
     }
     val autoStart = intent.getBooleanExtra("wt_autostart", false)
-    val carrier = when (intent.getStringExtra("wt_carrier")?.trim()?.lowercase()) {
-      "webrtc", "livekit" -> Carrier.WEBRTC
-      else -> Carrier.WEBRTC
-    }
     val peerLabel = intent.getStringExtra("wt_peer_label")?.trim()?.takeIf { it.isNotEmpty() }
     val peerId = intent.extras?.let { bundle ->
       if (bundle.containsKey("wt_peer_id")) bundle.getLong("wt_peer_id") else null
@@ -346,7 +430,6 @@ class MainActivity : AppCompatActivity() {
     val socksPort = intent.getIntExtra("wt_socks_port", 1080)
     return AutoStartConfig(
       enabled = autoStart,
-      carrier = carrier,
       peerLabel = peerLabel,
       peerId = peerId,
       socksPort = socksPort,
@@ -359,7 +442,6 @@ class MainActivity : AppCompatActivity() {
     if (state.loginStage != LoginStage.READY || state.tunnel != null || state.chats.isEmpty()) return
     if (state.busy) return
 
-    selectedCarrier = config.carrier
     render(state)
 
     val selectedIndex = state.chats.indexOfFirst { chat ->
@@ -393,6 +475,11 @@ class MainActivity : AppCompatActivity() {
   private fun ensureVpnPermissionAndStart(request: StartTunnelRequest) {
     pendingVpnProbe = null
     pendingTunnelRequest = request
+    // Best-effort battery-optimization exemption prompt. Doesn't block the start
+    // flow — the system shows its own dialog and we proceed regardless of the
+    // user's choice. The exemption matters most on Samsung/Xiaomi/Huawei where
+    // the OEM background killer is more aggressive than stock Android.
+    maybeRequestBatteryOptimizationExemption()
     val intent = VpnService.prepare(this)
     if (intent != null) {
       vpnPermissionLauncher.launch(intent)
@@ -406,7 +493,6 @@ class MainActivity : AppCompatActivity() {
     lifecycleScope.launch {
       try {
         val newState = controller.startTunnel(
-          carrier = request.carrier,
           selected = request.selected,
           socksPort = request.socksPort,
         )
