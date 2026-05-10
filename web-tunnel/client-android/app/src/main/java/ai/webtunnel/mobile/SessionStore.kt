@@ -20,6 +20,7 @@ data class LastTunnelTarget(
 
 class SessionStore(context: Context) {
   private val file = File(context.filesDir, "bale-session.json")
+  private val configFile = File(context.filesDir, "client-config.txt")
   private val keyPinsFile = File(context.filesDir, "server-key-pins.json")
   private val lastTargetFile = File(context.filesDir, "last-tunnel-target.json")
 
@@ -45,6 +46,17 @@ class SessionStore(context: Context) {
 
   fun clear() {
     if (file.exists()) file.delete()
+  }
+
+  fun loadClientConfig(): String? =
+    if (configFile.exists()) configFile.readText() else null
+
+  fun saveClientConfig(config: String) {
+    configFile.writeText(config)
+  }
+
+  fun clearClientConfig() {
+    if (configFile.exists()) configFile.delete()
   }
 
   fun loadPinnedFingerprint(keyId: String): String? {

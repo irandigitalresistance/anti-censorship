@@ -4,6 +4,14 @@ export {
   type ClientType,
   type ClientMetadata,
 } from './version.js';
+export {
+  CLIENT_CONFIG_PREFIX,
+  encodeClientConfig,
+  decodeClientConfig,
+  type ClientConfigBaleSession,
+  type ClientConfigServerPeer,
+  type WebTunnelClientConfigV1,
+} from './client-config.js';
 export { Opcode, type Frame, encodeFrame, decodeFrame, chunkPayload, MAX_CHUNK_PAYLOAD } from './frame.js';
 export { encodeOpen, decodeOpen, type OpenAddress } from './open.js';
 export {

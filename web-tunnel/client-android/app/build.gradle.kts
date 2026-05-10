@@ -13,8 +13,8 @@ android {
     applicationId = "ai.webtunnel.mobile"
     minSdk = 26
     targetSdk = 35
-    versionCode = 302
-    versionName = "0.2.2"
+    versionCode = 400
+    versionName = "0.4.0-beta"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

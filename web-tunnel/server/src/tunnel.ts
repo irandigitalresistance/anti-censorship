@@ -5,6 +5,7 @@ import {
   serverHandshakeV2,
   type EncodeV2PacketOptions,
   type Transport,
+  type V2ClientMetadata,
   type V2LogReport,
   type V2ServerIdentity,
 } from '@webtunnel/shared';
@@ -62,6 +63,7 @@ export async function runServerTunnel(
 
 export interface RunServerTunnelV2Options extends RunServerTunnelOptions, EncodeV2PacketOptions {
   identity: V2ServerIdentity;
+  onClientMetadata?: (metadata: V2ClientMetadata | null, tunnelId: string | null) => void | Promise<void>;
   onLogReport?: (report: V2LogReport, tunnelId: string | null) => void;
   pingIntervalMs?: number;
   maxMissedPongs?: number;
@@ -78,6 +80,15 @@ export async function runServerTunnelV2(
   opts: RunServerTunnelV2Options,
 ): Promise<RunServerTunnelV2Result> {
   const hs = await serverHandshakeV2(transport, opts.identity);
+  if (opts.onClientMetadata) {
+    try {
+      await opts.onClientMetadata(hs.clientMetadata, opts.handle?.id ?? null);
+    } catch (e) {
+      const reason = (e as Error).message || 'client metadata rejected';
+      try { transport.close(reason); } catch { /* ignore */ }
+      throw e;
+    }
+  }
   if (hs.clientMetadata) {
     const ct = typeof hs.clientMetadata.clientType === 'string' ? hs.clientMetadata.clientType : null;
     const cv = typeof hs.clientMetadata.clientVersion === 'string' ? hs.clientMetadata.clientVersion : null;

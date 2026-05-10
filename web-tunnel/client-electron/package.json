@@ -1,6 +1,6 @@
 {
   "name": "@webtunnel/client-electron",
-  "version": "0.3.0-beta",
+  "version": "0.4.0-beta",
   "description": "Web Tunnel Windows client (Electron) — anti-censorship proxy over Bale Messenger",
   "author": "Web Tunnel",
   "private": true,

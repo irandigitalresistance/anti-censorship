@@ -85,6 +85,59 @@
       </com.google.android.material.card.MaterialCardView>
 
       <com.google.android.material.card.MaterialCardView
+          android:id="@+id/configStep"
+          android:layout_width="match_parent"
+          android:layout_height="wrap_content"
+          android:layout_marginBottom="12dp"
+          app:cardBackgroundColor="@color/wt_panel"
+          app:cardCornerRadius="12dp"
+          app:strokeColor="@color/wt_border"
+          app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+          <TextView
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:text="@string/config_title"
+              android:textColor="@color/wt_text"
+              android:textSize="18sp"
+              android:textStyle="bold" />
+
+          <com.google.android.material.textfield.TextInputLayout
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:hint="@string/config_hint"
+              app:boxBackgroundMode="outline"
+              app:boxStrokeColor="@color/wt_border"
+              app:hintTextColor="@color/wt_muted">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/clientConfig"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="top"
+                android:inputType="textMultiLine|textNoSuggestions"
+                android:minLines="3"
+                android:textColor="@color/wt_text" />
+          </com.google.android.material.textfield.TextInputLayout>
+
+          <com.google.android.material.button.MaterialButton
+              android:id="@+id/importConfig"
+              style="@style/Widget.WebTunnel.Button.Primary"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:layout_marginTop="16dp"
+              android:text="@string/import_config" />
+        </LinearLayout>
+      </com.google.android.material.card.MaterialCardView>
+
+      <com.google.android.material.card.MaterialCardView
           android:id="@+id/phoneStep"
           android:layout_width="match_parent"
           android:layout_height="wrap_content"

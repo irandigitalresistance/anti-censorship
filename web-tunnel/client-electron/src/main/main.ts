@@ -93,6 +93,7 @@ ipcMain.handle('auth:verify-password', async (_e, pw: string) => controller.veri
 ipcMain.handle('auth:back-to-phone', () => controller.backToPhone());
 ipcMain.handle('auth:back-to-code', () => controller.backToCode());
 ipcMain.handle('auth:sign-out', async () => controller.signOut());
+ipcMain.handle('config:import', async (_e, config: string) => controller.importClientConfig(config));
 ipcMain.handle('chats:list', async () => controller.listChats());
 ipcMain.handle('tunnel:start', async (_e, opts) => controller.startTunnel(opts));
 ipcMain.handle('tunnel:stop', async () => controller.stopTunnel());

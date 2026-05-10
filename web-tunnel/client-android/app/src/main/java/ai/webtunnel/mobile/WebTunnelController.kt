@@ -44,6 +44,11 @@ data class TunnelStatus(
   val streamsActive: Int = 0,
 )
 
+data class ClientConfigSummary(
+  val clientId: String,
+  val serverUuid: String,
+)
+
 data class SpeedTestResult(
   val latencyMs: Long,
   val uploadKbps: Int,
@@ -97,6 +102,7 @@ data class ControllerState(
   val loginStage: LoginStage = LoginStage.UNAUTHENTICATED,
   val pendingPhone: String? = null,
   val meLabel: String? = null,
+  val configClient: ClientConfigSummary? = null,
   val chats: List<ChatOption> = emptyList(),
   val tunnel: TunnelStatus? = null,
   val lastError: String? = null,
@@ -128,6 +134,7 @@ class WebTunnelController(
   private val sessionStore = SessionStore(appContext)
   private val baleClient = BaleClient()
   private val logs = ArrayDeque<String>()
+  private var managedConfig: ClientConfigPayload? = null
 
   private var pendingTransactionHash: String? = null
   private var runtime: TunnelRuntime? = null
@@ -155,20 +162,60 @@ class WebTunnelController(
     if (bootstrapped) return snapshot()
     bootstrapped = true
     setBusy(true)
-    val session = withContext(Dispatchers.IO) { sessionStore.load() }
-    if (session != null) {
-      baleClient.loadSession(session)
-      state = state.copy(
-        loginStage = LoginStage.READY,
-        meLabel = session.userName ?: "logged in",
-        lastError = null,
-      )
-      reloadChatsInternal()
-    } else {
-      state = ControllerState()
+    val rawConfig = withContext(Dispatchers.IO) { sessionStore.loadClientConfig() }
+    var loadError: String? = null
+    if (!rawConfig.isNullOrBlank()) {
+      try {
+        applyClientConfig(decodeClientConfig(rawConfig))
+        setBusy(false)
+        return snapshot()
+      } catch (error: Throwable) {
+        loadError = "load client config failed: ${error.message}"
+      }
     }
+    state = ControllerState(lastError = loadError)
     setBusy(false)
     return snapshot()
+  }
+
+  suspend fun importClientConfig(rawConfig: String): ControllerState {
+    setBusy(true)
+    clearError()
+    return try {
+      val payload = decodeClientConfig(rawConfig)
+      withContext(Dispatchers.IO) { sessionStore.saveClientConfig(rawConfig.trim()) }
+      applyClientConfig(payload)
+      logLine("client config imported for server ${payload.serverUuid}")
+      snapshot()
+    } catch (error: Throwable) {
+      state = state.copy(lastError = "import config failed: ${error.message}")
+      snapshot()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  private fun applyClientConfig(payload: ClientConfigPayload) {
+    managedConfig = payload
+    baleClient.loadSession(payload.baleSession)
+    val server = ChatOption(
+      label = payload.serverUuid,
+      chatId = payload.serverPeer.chatId,
+      chatType = payload.serverPeer.chatType,
+    )
+    state = state.copy(
+      loginStage = LoginStage.READY,
+      pendingPhone = null,
+      meLabel = "Server UUID: ${payload.serverUuid}",
+      configClient = ClientConfigSummary(
+        clientId = payload.clientId,
+        serverUuid = payload.serverUuid,
+      ),
+      chats = listOf(server),
+      lastError = null,
+    )
+    pendingTransactionHash = null
+    emit()
   }
 
   suspend fun sendPhoneCode(phone: String): ControllerState {
@@ -265,16 +312,30 @@ class WebTunnelController(
   suspend fun signOut(): ControllerState {
     stopTunnel()
     sessionStore.clear()
+    sessionStore.clearClientConfig()
+    managedConfig = null
     pendingTransactionHash = null
     state = ControllerState()
     emit()
     return snapshot()
   }
 
+  @Suppress("UNUSED_PARAMETER")
   suspend fun startTunnel(
     selected: ChatOption,
     socksPort: Int,
   ): ControllerState {
+    val config = managedConfig
+    if (config == null) {
+      state = state.copy(lastError = "import a client config first")
+      emit()
+      return snapshot()
+    }
+    val effectiveSelected = ChatOption(
+      label = config.serverUuid,
+      chatId = config.serverPeer.chatId,
+      chatType = config.serverPeer.chatType,
+    )
     if (state.loginStage != LoginStage.READY) {
       state = state.copy(lastError = "not authenticated")
       emit()
@@ -286,7 +347,7 @@ class WebTunnelController(
       return snapshot()
     }
 
-    lastStartParams = StartParams(selected, socksPort)
+    lastStartParams = StartParams(effectiveSelected, socksPort)
     if (!insideReconnect) {
       userCancelled = false
       reconnectJob?.cancel()
@@ -300,7 +361,7 @@ class WebTunnelController(
       retryAttempt = if (insideReconnect) state.retryAttempt else 0,
     )
     emit()
-    logLine("starting WebRTC tunnel to ${selected.label} on SOCKS $socksPort")
+    logLine("starting WebRTC tunnel to ${effectiveSelected.label} on SOCKS $socksPort")
 
     var room: io.livekit.android.room.Room? = null
     var transport: LiveKitTransport? = null
@@ -312,10 +373,10 @@ class WebTunnelController(
 
     try {
       val peer = BalePeer(
-        type = if (selected.chatType == "PRIVATE") BalePeerType.PRIVATE else BalePeerType.GROUP,
-        id = selected.chatId,
+        type = if (effectiveSelected.chatType == "PRIVATE") BalePeerType.PRIVATE else BalePeerType.GROUP,
+        id = effectiveSelected.chatId,
       )
-      val keyId = serverKeyId(selected)
+      val keyId = serverKeyId(effectiveSelected)
       pushConnectingEvent("Initiating Bale Meet call...")
       val call = baleClient.startCall(peer)
       callId = call.callId
@@ -335,9 +396,11 @@ class WebTunnelController(
           runClientTunnelV2(
             transport,
             mapOf(
-              "clientType" to "android",
-              "clientVersion" to BuildConfig.VERSION_NAME,
-            ),
+            "clientType" to "android",
+            "clientVersion" to BuildConfig.VERSION_NAME,
+            "webTunnelClientId" to managedConfig?.clientId,
+            "webTunnelConfigVersion" to if (managedConfig != null) 1 else null,
+          ),
           )
         }
       } catch (_: TimeoutCancellationException) {
@@ -431,9 +494,9 @@ class WebTunnelController(
       try {
         sessionStore.saveLastTunnelTarget(
           LastTunnelTarget(
-            chatId = selected.chatId,
-            chatType = selected.chatType,
-            label = selected.label,
+            chatId = effectiveSelected.chatId,
+            chatType = effectiveSelected.chatType,
+            label = effectiveSelected.label,
             socksPort = boundPort,
           ),
         )
@@ -442,7 +505,7 @@ class WebTunnelController(
       state = state.copy(
         connectingEvents = null,
         tunnel = TunnelStatus(
-          serverLabel = selected.label,
+          serverLabel = effectiveSelected.label,
           socksPort = boundPort,
           startedAt = System.currentTimeMillis(),
           bytesUp = initialMetrics.bytesUp,
@@ -458,6 +521,12 @@ class WebTunnelController(
       logLine("startTunnel failed: ${error.message}")
       val detail = error.message ?: "unknown"
       val display = when {
+        detail.contains("CONFIG_ALREADY_CONNECTED") ->
+          "This client config is already connected on another device"
+        detail.contains("CONFIG_REQUIRED") ->
+          "Import a client config first"
+        detail.contains("CONFIG_UNKNOWN_CLIENT") ->
+          "This client config is not registered on the server"
         detail.startsWith("MUX_CLOSED_DURING_START:") -> "tunnel closed before startup completed"
         detail.contains("SERVER_KEY_MISMATCH") ->
           "Server identity changed — use Reset pins to reconnect to a reinstalled server"
@@ -697,10 +766,12 @@ class WebTunnelController(
 
   private suspend fun onAuthenticated(session: BaleSession) {
     withContext(Dispatchers.IO) { sessionStore.save(session) }
+    managedConfig = null
     pendingTransactionHash = null
     state = state.copy(
       loginStage = LoginStage.READY,
       meLabel = session.userName ?: "logged in",
+      configClient = null,
       lastError = null,
     )
     reloadChatsInternal()
@@ -708,19 +779,16 @@ class WebTunnelController(
   }
 
   private suspend fun reloadChatsInternal() {
-    val dialogs = baleClient.loadDialogs(40)
-    val privateIds = dialogs.filter { it.peer.type == BalePeerType.PRIVATE }.map { it.peer.id }
-    val userInfo = baleClient.loadUsers(privateIds).associateBy { it.id }
-    val chats = dialogs.mapNotNull { dialog ->
-      if (dialog.peer.type != BalePeerType.PRIVATE) return@mapNotNull null
-      val user = userInfo[dialog.peer.id]
-      ChatOption(
-        label = user?.name ?: "user ${dialog.peer.id}",
-        chatId = dialog.peer.id,
-        chatType = "PRIVATE",
-      )
+    managedConfig?.let {
+      state = state.copy(chats = listOf(ChatOption(
+        label = it.serverUuid,
+        chatId = it.serverPeer.chatId,
+        chatType = it.serverPeer.chatType,
+      )))
+      emit()
+      return
     }
-    state = state.copy(chats = chats)
+    state = state.copy(chats = emptyList())
     emit()
   }
 
@@ -777,6 +845,10 @@ class WebTunnelController(
     "${selected.chatType}:${selected.chatId}"
 
   private fun assertServerIdentityTrusted(keyId: String, fingerprint: String) {
+    val configured = managedConfig?.serverFingerprint
+    if (!configured.isNullOrBlank() && configured != fingerprint) {
+      throw IllegalStateException("SERVER_KEY_MISMATCH: expected $configured got $fingerprint")
+    }
     val pinned = sessionStore.loadPinnedFingerprint(keyId)
     if (pinned == null) {
       sessionStore.savePinnedFingerprint(keyId, fingerprint)

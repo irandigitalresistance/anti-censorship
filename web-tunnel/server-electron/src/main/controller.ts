@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import {
+  APP_VERSION,
   BaleChatType,
   BaleClient,
   BaleIncomingCallWatcher,
@@ -12,11 +13,14 @@ import {
   connectLivekitRoom,
   createV2ServerIdentityFromPrivateKey,
   deriveKeyFromPassword,
+  encodeClientConfig,
   makeLocalLivekitRoomFactory,
   serverFingerprint,
   startLocalLivekitBroker,
+  type V2ClientMetadata,
   type V2LogReport,
   type V2ServerIdentity,
+  type WebTunnelClientConfigV1,
   type LocalLivekitBrokerHandle,
   type BaleSession,
   type LivekitRoomFactory,
@@ -43,10 +47,21 @@ export type LoginStage =
   | 'awaiting-password'
   | 'ready';
 
+export type AccountKind = 'server' | 'client';
+
+export interface AccountLoginStatus {
+  loginStage: LoginStage;
+  pendingPhone: string | null;
+  me: { id: number; name: string | null; phone: string | null } | null;
+  lastError: string | null;
+}
+
 export interface ServerStatus {
   loginStage: LoginStage;
   pendingPhone: string | null;
   me: { id: number; name: string | null; phone: string | null } | null;
+  serverAccount: AccountLoginStatus;
+  clientAccount: AccountLoginStatus;
   running: boolean;
   tunnelsActive: number;
   streamsActive: number;
@@ -62,6 +77,8 @@ export interface ServerStatus {
   users: ServerUserStats[];
   logs: ClientLogSummary[];
   crashes: CrashRecord[];
+  clientProfiles: ServerClientProfileStatus[];
+  serverUuid: string | null;
   serverFingerprint: string | null;
   lastError: string | null;
   /** URL clients can POST diagnostics to without an active tunnel. */
@@ -85,6 +102,19 @@ export interface ServerUserStats {
   activeTunnelIds: string[];
 }
 
+export interface ServerClientProfileStatus {
+  id: string;
+  name: string;
+  createdAt: number;
+  config: string;
+  bytesUp: number;
+  bytesDown: number;
+  totalBytes: number;
+  lastSeen: number | null;
+  activeConnections: number;
+  activeTunnelIds: string[];
+}
+
 export interface ServerConnectionStreamStatus {
   streamId: number;
   target: string;
@@ -98,6 +128,9 @@ export interface ServerConnectionStatus {
   label: string;
   carrier: string | null;
   protocolVersion: number | null;
+  clientId: string | null;
+  clientName: string | null;
+  clientKind: 'managed' | 'legacy' | null;
   terminable: boolean;
   terminationState: 'idle' | 'terminating' | 'terminated' | 'failed';
   openedAt: number;
@@ -118,6 +151,16 @@ export interface ServerControllerOptions {
   sessionFile?: string;
 }
 
+interface StoredClientProfile {
+  id: string;
+  name: string;
+  createdAt: number;
+  config: string;
+  bytesUp: number;
+  bytesDown: number;
+  lastSeen: number | null;
+}
+
 function defaultSessionFile(): string {
   const dir = path.join(os.homedir(), '.webtunnel');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -126,9 +169,12 @@ function defaultSessionFile(): string {
 
 export class ServerController extends EventEmitter {
   private readonly sessionFile: string;
+  private readonly clientSessionFile: string;
   private readonly identityFile: string;
+  private readonly serverUuidFile: string;
   private readonly statsFile: string;
   private readonly userStatsFile: string;
+  private readonly clientProfilesFile: string;
   /**
    * Per-user stats live BOTH on disk (`server-user-stats.json`) and inside
    * the active TunnelManager. When the server is stopped, the manager is
@@ -136,7 +182,10 @@ export class ServerController extends EventEmitter {
    * users — operator can still hit Reset on them.
    */
   private cachedUserStats: UserStats[] = [];
+  private clientProfiles: StoredClientProfile[] = [];
+  private readonly managedConnectionBytes = new Map<string, { up: number; down: number }>();
   private readonly client: BaleClient;
+  private readonly configClient: BaleClient;
   private sidecar: NativeBaleSidecar | null = null;
   private incomingCalls: BaleIncomingCallWatcher | null = null;
   private dispatcher: BaleServerDispatcher | null = null;
@@ -150,6 +199,7 @@ export class ServerController extends EventEmitter {
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private statsPersistTimer: ReturnType<typeof setInterval> | null = null;
   private pendingTransactionHash: string | null = null;
+  private pendingClientTransactionHash: string | null = null;
   private readonly peerLookupCache = new Map<string, { name: string | null; username: string | null }>();
   private readonly pendingPeerLookups = new Set<string>();
   private readonly peerLookupLastAttempt = new Map<string, number>();
@@ -157,6 +207,8 @@ export class ServerController extends EventEmitter {
     loginStage: 'unauthenticated',
     pendingPhone: null,
     me: null,
+    serverAccount: blankAccountStatus(),
+    clientAccount: blankAccountStatus(),
     running: false,
     tunnelsActive: 0,
     streamsActive: 0,
@@ -170,6 +222,8 @@ export class ServerController extends EventEmitter {
     connections: [],
     users: [],
     logs: [],
+    clientProfiles: [],
+    serverUuid: null,
     serverFingerprint: null,
     lastError: null,
   };
@@ -177,15 +231,22 @@ export class ServerController extends EventEmitter {
   constructor(opts: ServerControllerOptions = {}) {
     super();
     this.sessionFile = opts.sessionFile ?? defaultSessionFile();
+    this.clientSessionFile = path.join(path.dirname(this.sessionFile), 'server-managed-client-session.json');
     this.identityFile = path.join(path.dirname(this.sessionFile), 'server-v2-identity.json');
+    this.serverUuidFile = path.join(path.dirname(this.sessionFile), 'server-uuid.json');
     this.statsFile = path.join(path.dirname(this.sessionFile), 'server-stats.json');
     this.userStatsFile = path.join(path.dirname(this.sessionFile), 'server-user-stats.json');
+    this.clientProfilesFile = path.join(path.dirname(this.sessionFile), 'server-client-profiles.json');
     this.client = new BaleClient();
+    this.configClient = new BaleClient({ deviceTitle: 'Chrome_143.0.0.0, Windows Managed Client' });
     const persisted = this.loadPersistedStats();
     this.status.lifetimeBytesUp = persisted.up;
     this.status.lifetimeBytesDown = persisted.down;
     this.cachedUserStats = this.loadPersistedUserStats();
+    this.clientProfiles = this.loadClientProfiles();
     this.status.users = this.cachedUserStats.map(toServerUserStats);
+    this.status.clientProfiles = this.buildClientProfileStatus([]);
+    this.status.serverUuid = this.ensureServerUuid();
   }
 
   private loadPersistedStats(): { up: number; down: number } {
@@ -228,6 +289,40 @@ export class ServerController extends EventEmitter {
     }
   }
 
+  private loadClientProfiles(): StoredClientProfile[] {
+    try {
+      if (!fs.existsSync(this.clientProfilesFile)) return [];
+      const raw = JSON.parse(fs.readFileSync(this.clientProfilesFile, 'utf8')) as { clients?: StoredClientProfile[] };
+      const clients = Array.isArray(raw.clients) ? raw.clients : [];
+      return clients
+        .filter((client) => client && typeof client.id === 'string' && typeof client.name === 'string')
+        .map((client) => ({
+          id: client.id,
+          name: client.name,
+          createdAt: Number.isFinite(client.createdAt) ? client.createdAt : Date.now(),
+          config: typeof client.config === 'string' ? client.config : '',
+          bytesUp: Math.max(0, Math.floor(client.bytesUp ?? 0)),
+          bytesDown: Math.max(0, Math.floor(client.bytesDown ?? 0)),
+          lastSeen: typeof client.lastSeen === 'number' ? client.lastSeen : null,
+        }))
+        .sort((a, b) => a.createdAt - b.createdAt);
+    } catch (e) {
+      console.warn('[controller] loadClientProfiles failed:', (e as Error).message);
+      return [];
+    }
+  }
+
+  private persistClientProfiles(): void {
+    try {
+      fs.writeFileSync(this.clientProfilesFile, JSON.stringify({
+        clients: this.clientProfiles,
+        savedAt: Date.now(),
+      }, null, 2));
+    } catch (e) {
+      console.warn('[controller] persistClientProfiles failed:', (e as Error).message);
+    }
+  }
+
   private persistStats(): void {
     try {
       fs.writeFileSync(this.statsFile, JSON.stringify({
@@ -246,6 +341,7 @@ export class ServerController extends EventEmitter {
     } catch (e) {
       console.warn('[controller] persistUserStats failed:', (e as Error).message);
     }
+    this.persistClientProfiles();
   }
 
   init(): void {
@@ -264,6 +360,21 @@ export class ServerController extends EventEmitter {
         this.status.lastError = `failed to load saved session: ${(e as Error).message}`;
       }
     }
+    if (fs.existsSync(this.clientSessionFile)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(this.clientSessionFile, 'utf8'));
+        const session: BaleSession = {
+          jwt: raw.jwt,
+          userId: BigInt(raw.userId),
+          userName: raw.userName ?? null,
+          userAccessHash: BigInt(raw.userAccessHash),
+        };
+        this.configClient.loadSession(session);
+        this.onClientAuthenticated(session);
+      } catch (e) {
+        this.patchAccount('client', { lastError: `failed to load saved client account: ${(e as Error).message}` });
+      }
+    }
     this.emitStatus();
   }
 
@@ -271,101 +382,124 @@ export class ServerController extends EventEmitter {
     return structuredClone(this.status);
   }
 
-  async sendPhoneCode(phone: string): Promise<void> {
-    console.log(`[controller] sendPhoneCode phone=${phone}`);
-    this.status.lastError = null;
+  async sendPhoneCode(phone: string, account: AccountKind = 'server'): Promise<void> {
+    console.log(`[controller] sendPhoneCode account=${account} phone=${phone}`);
+    this.patchAccount(account, { lastError: null });
     try {
-      const resp = await this.client.startPhoneAuth(phone);
+      const resp = await this.baleClientFor(account).startPhoneAuth(phone);
       console.log(`[controller] startPhoneAuth OK transactionHash=${resp.transactionHash.slice(0, 16)}…`);
-      this.pendingTransactionHash = resp.transactionHash;
-      this.status.pendingPhone = phone;
-      this.status.loginStage = 'awaiting-code';
+      this.setPendingTransaction(account, resp.transactionHash);
+      this.patchAccount(account, {
+        pendingPhone: phone,
+        loginStage: 'awaiting-code',
+      });
       this.emitStatus();
     } catch (e) {
       console.error('[controller] sendPhoneCode failed:', e);
-      this.status.lastError = `send code failed: ${(e as Error).message}\n${(e as Error).stack ?? ''}`;
+      this.patchAccount(account, { lastError: `send code failed: ${(e as Error).message}\n${(e as Error).stack ?? ''}` });
       this.emitStatus();
       throw e;
     }
   }
 
-  async resendCode(): Promise<void> {
-    if (!this.status.pendingPhone) throw new Error('no pending phone to resend');
-    await this.sendPhoneCode(this.status.pendingPhone);
+  async resendCode(account: AccountKind = 'server'): Promise<void> {
+    const pendingPhone = this.accountStatus(account).pendingPhone;
+    if (!pendingPhone) throw new Error('no pending phone to resend');
+    await this.sendPhoneCode(pendingPhone, account);
   }
 
-  backToPhone(): void {
-    this.pendingTransactionHash = null;
-    this.status.loginStage = 'unauthenticated';
-    this.status.lastError = null;
+  backToPhone(account: AccountKind = 'server'): void {
+    this.setPendingTransaction(account, null);
+    this.patchAccount(account, {
+      loginStage: 'unauthenticated',
+      lastError: null,
+    });
     this.emitStatus();
   }
 
-  backToCode(): void {
-    if (this.status.loginStage !== 'awaiting-password') return;
-    this.status.loginStage = 'awaiting-code';
-    this.status.lastError = null;
+  backToCode(account: AccountKind = 'server'): void {
+    if (this.accountStatus(account).loginStage !== 'awaiting-password') return;
+    this.patchAccount(account, {
+      loginStage: 'awaiting-code',
+      lastError: null,
+    });
     this.emitStatus();
   }
 
-  async verifyCode(code: string): Promise<void> {
-    this.status.lastError = null;
-    if (!this.pendingTransactionHash) {
-      this.status.lastError = 'no pending login transaction';
+  async verifyCode(code: string, account: AccountKind = 'server'): Promise<void> {
+    this.patchAccount(account, { lastError: null });
+    const tx = this.pendingTransaction(account);
+    if (!tx) {
+      this.patchAccount(account, { lastError: 'no pending login transaction' });
       this.emitStatus();
-      throw new Error(this.status.lastError);
+      throw new Error('no pending login transaction');
     }
     try {
-      const result = await this.client.validateCode(code, this.pendingTransactionHash);
+      const result = await this.baleClientFor(account).validateCode(code, tx);
       if (result === 'PASSWORD_NEEDED') {
-        this.status.loginStage = 'awaiting-password';
+        this.patchAccount(account, { loginStage: 'awaiting-password' });
         this.emitStatus();
         return;
       }
       if (typeof result === 'string') {
-        this.status.lastError = `validate failed: ${result}`;
+        this.patchAccount(account, { lastError: `validate failed: ${result}` });
         this.emitStatus();
         return;
       }
-      this.persistSession(result);
-      this.onAuthenticated(result);
+      this.persistSession(result, account);
+      if (account === 'server') this.onAuthenticated(result);
+      else this.onClientAuthenticated(result);
     } catch (e) {
-      this.status.lastError = `verify code failed: ${(e as Error).message}`;
+      this.patchAccount(account, { lastError: `verify code failed: ${(e as Error).message}` });
       this.emitStatus();
       throw e;
     }
   }
 
-  async verifyPassword(password: string): Promise<void> {
-    this.status.lastError = null;
-    if (!this.pendingTransactionHash) {
-      this.status.lastError = 'no pending login transaction';
+  async verifyPassword(password: string, account: AccountKind = 'server'): Promise<void> {
+    this.patchAccount(account, { lastError: null });
+    const tx = this.pendingTransaction(account);
+    if (!tx) {
+      this.patchAccount(account, { lastError: 'no pending login transaction' });
       this.emitStatus();
-      throw new Error(this.status.lastError);
+      throw new Error('no pending login transaction');
     }
     try {
-      const result = await this.client.validatePassword(password, this.pendingTransactionHash);
+      const result = await this.baleClientFor(account).validatePassword(password, tx);
       if (typeof result === 'string') {
-        this.status.lastError = `validate failed: ${result}`;
+        this.patchAccount(account, { lastError: `validate failed: ${result}` });
         this.emitStatus();
         return;
       }
-      this.persistSession(result);
-      this.onAuthenticated(result);
+      this.persistSession(result, account);
+      if (account === 'server') this.onAuthenticated(result);
+      else this.onClientAuthenticated(result);
     } catch (e) {
-      this.status.lastError = `verify password failed: ${(e as Error).message}`;
+      this.patchAccount(account, { lastError: `verify password failed: ${(e as Error).message}` });
       this.emitStatus();
       throw e;
     }
   }
 
-  async signOut(): Promise<void> {
+  async signOut(account: AccountKind = 'server'): Promise<void> {
+    if (account === 'client') {
+      if (fs.existsSync(this.clientSessionFile)) fs.unlinkSync(this.clientSessionFile);
+      this.configClient.loadSession(nullSession());
+      this.pendingClientTransactionHash = null;
+      this.patchAccount('client', blankAccountStatus());
+      this.emitStatus();
+      return;
+    }
     await this.stopServer();
     if (this.sidecar) { await this.sidecar.close(); this.sidecar = null; }
     if (fs.existsSync(this.sessionFile)) fs.unlinkSync(this.sessionFile);
+    const clientAccount = this.status.clientAccount;
+    const clientProfiles = this.status.clientProfiles;
     this.status = {
       loginStage: 'unauthenticated',
       pendingPhone: null, me: null,
+      serverAccount: blankAccountStatus(),
+      clientAccount,
       running: false, tunnelsActive: 0, streamsActive: 0,
       bytesUp: 0, bytesDown: 0,
       // lifetime totals are persisted across signouts deliberately — they
@@ -378,6 +512,8 @@ export class ServerController extends EventEmitter {
       users: this.status.users,
       logs: [],
       crashes: [],
+      clientProfiles,
+      serverUuid: this.status.serverUuid,
       serverFingerprint: this.status.serverFingerprint,
       uploadEndpoint: this.status.uploadEndpoint ?? null,
       lastError: null,
@@ -496,6 +632,7 @@ export class ServerController extends EventEmitter {
       logger: (line) => { console.log(`[server-dispatch] ${line}`); },
       protocolVersion: 2,
       identity: this.serverIdentity ?? undefined,
+      onClientMetadata: (metadata, tunnelId) => this.handleClientMetadata(metadata, tunnelId),
       onLogReport,
       ...(mode === 'mock'
         ? {}
@@ -536,8 +673,10 @@ export class ServerController extends EventEmitter {
       this.status.lifetimeBytesUp = lifetime.up;
       this.status.lifetimeBytesDown = lifetime.down;
       this.cachedUserStats = this.manager.listUsers();
+      this.updateManagedClientUsage(active);
       this.refreshUserStats(active);
       this.refreshConnectionDetails(active);
+      this.status.clientProfiles = this.buildClientProfileStatus(active);
       this.queuePeerLookups(active);
       this.status.logs = this.logStore?.list() ?? [];
       this.status.crashes = this.crashStore?.list() ?? [];
@@ -608,6 +747,7 @@ export class ServerController extends EventEmitter {
     // Keep showing all users (with active=0) even after the server stops —
     // operator should still be able to see and reset them.
     this.refreshUserStats([]);
+    this.status.clientProfiles = this.buildClientProfileStatus([]);
     this.emitStatus();
   }
 
@@ -648,6 +788,134 @@ export class ServerController extends EventEmitter {
     this.refreshUserStats(this.manager?.snapshot() ?? []);
     this.persistStats();
     this.emitStatus();
+  }
+
+  async createClient(name: string): Promise<ServerClientProfileStatus> {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error('client name is required');
+    if (this.clientProfiles.some((client) => client.name.toLowerCase() === trimmed.toLowerCase())) {
+      throw new Error(`client name already exists: ${trimmed}`);
+    }
+    const serverSession = this.client.currentSession();
+    const clientSession = this.configClient.currentSession();
+    if (!serverSession) throw new Error('server account must be logged in');
+    if (!clientSession) throw new Error('client account must be logged in');
+    const identity = this.ensureServerIdentity();
+    const id = crypto.randomUUID();
+    const createdAt = Date.now();
+    const payload: WebTunnelClientConfigV1 = {
+      schema: 1,
+      clientId: id,
+      clientName: trimmed,
+      createdAt,
+      carrier: 'webrtc',
+      defaultSocksPort: 1080,
+      baleSession: {
+        jwt: clientSession.jwt,
+        userId: String(clientSession.userId),
+        userName: clientSession.userName,
+        userAccessHash: String(clientSession.userAccessHash),
+      },
+      serverPeer: {
+        chatId: Number(serverSession.userId),
+        chatType: 'PRIVATE',
+        label: serverSession.userName || `server ${serverSession.userId}`,
+      },
+      serverUuid: this.ensureServerUuid(),
+      serverFingerprint: serverFingerprint(identity.publicKey),
+    };
+    const config = await encodeClientConfig(payload);
+    const profile: StoredClientProfile = {
+      id,
+      name: trimmed,
+      createdAt,
+      config,
+      bytesUp: 0,
+      bytesDown: 0,
+      lastSeen: null,
+    };
+    this.clientProfiles.push(profile);
+    this.clientProfiles.sort((a, b) => a.createdAt - b.createdAt);
+    this.persistClientProfiles();
+    this.status.clientProfiles = this.buildClientProfileStatus(this.manager?.snapshot() ?? []);
+    this.emitStatus();
+    return this.status.clientProfiles.find((client) => client.id === id)!;
+  }
+
+  private handleClientMetadata(metadata: V2ClientMetadata | null, tunnelId: string | null): void {
+    if (!tunnelId) return;
+    const clientId = typeof metadata?.webTunnelClientId === 'string'
+      ? metadata.webTunnelClientId.trim()
+      : '';
+    if (!clientId) {
+      throw new Error('CONFIG_REQUIRED: import a managed client config first');
+    }
+    const profile = this.clientProfiles.find((client) => client.id === clientId);
+    if (!profile) throw new Error('CONFIG_UNKNOWN_CLIENT: this client config is not registered on the server');
+    const alreadyActive = this.manager?.snapshot().find((tunnel) => {
+      return tunnel.id !== tunnelId
+        && tunnel.clientId === clientId;
+    });
+    if (alreadyActive) {
+      throw new Error('CONFIG_ALREADY_CONNECTED');
+    }
+    profile.lastSeen = Date.now();
+    this.manager?.updateTunnel(tunnelId, {
+      clientId,
+      clientName: profile.name,
+      clientKind: 'managed',
+    });
+    this.status.clientProfiles = this.buildClientProfileStatus(this.manager?.snapshot() ?? []);
+    this.persistClientProfiles();
+  }
+
+  private updateManagedClientUsage(snapshot: TunnelSnapshot[]): void {
+    const activeIds = new Set(snapshot.map((tunnel) => tunnel.id));
+    for (const key of Array.from(this.managedConnectionBytes.keys())) {
+      if (!activeIds.has(key)) this.managedConnectionBytes.delete(key);
+    }
+    let changed = false;
+    for (const tunnel of snapshot) {
+      if (!tunnel.clientId) continue;
+      const profile = this.clientProfiles.find((client) => client.id === tunnel.clientId);
+      if (!profile) continue;
+      const prev = this.managedConnectionBytes.get(tunnel.id) ?? { up: 0, down: 0 };
+      const upDelta = Math.max(0, tunnel.bytesUp - prev.up);
+      const downDelta = Math.max(0, tunnel.bytesDown - prev.down);
+      this.managedConnectionBytes.set(tunnel.id, { up: tunnel.bytesUp, down: tunnel.bytesDown });
+      if (upDelta > 0 || downDelta > 0) {
+        profile.bytesUp += upDelta;
+        profile.bytesDown += downDelta;
+        profile.lastSeen = Date.now();
+        changed = true;
+      }
+    }
+    if (changed) this.persistClientProfiles();
+  }
+
+  private buildClientProfileStatus(snapshot: TunnelSnapshot[]): ServerClientProfileStatus[] {
+    const activeByClient = new Map<string, string[]>();
+    for (const tunnel of snapshot) {
+      if (!tunnel.clientId) continue;
+      const ids = activeByClient.get(tunnel.clientId) ?? [];
+      ids.push(tunnel.id);
+      activeByClient.set(tunnel.clientId, ids);
+    }
+    return this.clientProfiles.map((client) => {
+      const activeTunnelIds = activeByClient.get(client.id) ?? [];
+      return {
+        id: client.id,
+        name: client.name,
+        createdAt: client.createdAt,
+        config: client.config,
+        bytesUp: client.bytesUp,
+        bytesDown: client.bytesDown,
+        totalBytes: client.bytesUp + client.bytesDown,
+        lastSeen: client.lastSeen,
+        activeConnections: activeTunnelIds.length,
+        activeTunnelIds,
+      };
+    });
   }
 
   private refreshUserStats(snapshot: TunnelSnapshot[]): void {
@@ -696,7 +964,7 @@ export class ServerController extends EventEmitter {
       try {
         this.crashStore.add({
           source: 'server-electron',
-          appVersion: '0.3-beta',
+          appVersion: APP_VERSION,
           occurredAt: Date.now(),
           kind,
           message,
@@ -708,9 +976,42 @@ export class ServerController extends EventEmitter {
     this.emitStatus();
   }
 
-  private persistSession(session: BaleSession): void {
+  private baleClientFor(account: AccountKind): BaleClient {
+    return account === 'server' ? this.client : this.configClient;
+  }
+
+  private accountStatus(account: AccountKind): AccountLoginStatus {
+    return account === 'server' ? this.status.serverAccount : this.status.clientAccount;
+  }
+
+  private patchAccount(account: AccountKind, patch: Partial<AccountLoginStatus>): void {
+    const next = {
+      ...this.accountStatus(account),
+      ...patch,
+    };
+    if (account === 'server') {
+      this.status.serverAccount = next;
+      this.status.loginStage = next.loginStage;
+      this.status.pendingPhone = next.pendingPhone;
+      this.status.me = next.me;
+      this.status.lastError = next.lastError;
+    } else {
+      this.status.clientAccount = next;
+    }
+  }
+
+  private pendingTransaction(account: AccountKind): string | null {
+    return account === 'server' ? this.pendingTransactionHash : this.pendingClientTransactionHash;
+  }
+
+  private setPendingTransaction(account: AccountKind, value: string | null): void {
+    if (account === 'server') this.pendingTransactionHash = value;
+    else this.pendingClientTransactionHash = value;
+  }
+
+  private persistSession(session: BaleSession, account: AccountKind = 'server'): void {
     fs.writeFileSync(
-      this.sessionFile,
+      account === 'server' ? this.sessionFile : this.clientSessionFile,
       JSON.stringify({
         jwt: session.jwt,
         userId: String(session.userId),
@@ -723,15 +1024,35 @@ export class ServerController extends EventEmitter {
   private onAuthenticated(session: BaleSession): void {
     this.sidecar = new NativeBaleSidecar({ client: this.client });
     const identity = this.ensureServerIdentity();
-    this.status.loginStage = 'ready';
-    this.status.me = {
+    const me = {
       id: Number(session.userId),
       name: session.userName,
       phone: null,
     };
+    this.patchAccount('server', {
+      loginStage: 'ready',
+      pendingPhone: null,
+      me,
+      lastError: null,
+    });
     this.status.serverFingerprint = serverFingerprint(identity.publicKey);
     this.status.lastError = null;
     this.pendingTransactionHash = null;
+    this.emitStatus();
+  }
+
+  private onClientAuthenticated(session: BaleSession): void {
+    this.patchAccount('client', {
+      loginStage: 'ready',
+      pendingPhone: null,
+      me: {
+        id: Number(session.userId),
+        name: session.userName,
+        phone: null,
+      },
+      lastError: null,
+    });
+    this.pendingClientTransactionHash = null;
     this.emitStatus();
   }
 
@@ -748,13 +1069,16 @@ export class ServerController extends EventEmitter {
     this.status.connections = interesting
       .map((tunnel) => {
       const peer = this.withResolvedPeer(tunnel.peer);
-      const userLabel = peer ? formatUserLabel(peer) : tunnel.label;
+      const userLabel = tunnel.clientName ?? (peer ? formatUserLabel(peer) : tunnel.label);
       const peerLabel = peer ? formatPeerLabel(peer) : tunnel.label;
       return {
         id: tunnel.id,
         label: tunnel.label,
         carrier: tunnel.carrier,
         protocolVersion: tunnel.protocolVersion,
+        clientId: tunnel.clientId,
+        clientName: tunnel.clientName,
+        clientKind: tunnel.clientKind,
         terminable: tunnel.terminable,
         terminationState: tunnel.terminationState,
         openedAt: tunnel.openedAt,
@@ -871,6 +1195,23 @@ export class ServerController extends EventEmitter {
     );
     return this.serverIdentity;
   }
+
+  private ensureServerUuid(): string {
+    try {
+      if (fs.existsSync(this.serverUuidFile)) {
+        const raw = JSON.parse(fs.readFileSync(this.serverUuidFile, 'utf8')) as { uuid?: string };
+        if (typeof raw.uuid === 'string') {
+          const uuid = raw.uuid.trim().toLowerCase();
+          if (isValidUuid(uuid)) return uuid;
+        }
+      }
+    } catch {
+      // fall through and regenerate
+    }
+    const uuid = crypto.randomUUID();
+    fs.writeFileSync(this.serverUuidFile, JSON.stringify({ uuid }, null, 2));
+    return uuid;
+  }
 }
 
 /**
@@ -890,6 +1231,23 @@ function buildServerLivekitFactory(lastAcceptResultRef: { current: StartCallResu
     const url = buildLiveKitUrl(accept);
     return connectLivekitRoom(url, ctx);
   };
+}
+
+function isValidUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function blankAccountStatus(): AccountLoginStatus {
+  return {
+    loginStage: 'unauthenticated',
+    pendingPhone: null,
+    me: null,
+    lastError: null,
+  };
+}
+
+function nullSession(): BaleSession {
+  return null as unknown as BaleSession;
 }
 
 function peerKey(peer: TunnelPeerSummary): string {

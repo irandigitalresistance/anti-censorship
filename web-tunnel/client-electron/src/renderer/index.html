@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
-    <title>Web Tunnel v0.3-beta</title>
+    <title>Web Tunnel v0.4.0-beta</title>
     <style>
       :root {
         --bg: #0e0f12;
@@ -26,7 +26,7 @@
       .card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; }
       .card h2 { margin: 0 0 10px; font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
       label { display: block; margin: 6px 0 3px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-      input, select, button { font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; width: 100%; }
+      input, select, textarea, button { font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; width: 100%; }
       button { cursor: pointer; width: auto; padding: 8px 18px; }
       button.primary { background: var(--accent); color: #08211a; border-color: var(--accent); font-weight: 500; }
       button.primary:hover { background: #6fe3b9; }
@@ -86,7 +86,7 @@
   </head>
   <body>
     <header>
-      <h1>web-tunnel v0.3-beta</h1>
+      <h1>web-tunnel v0.4.0-beta</h1>
       <div id="me" class="me">not logged in</div>
       <button id="open-log" class="btn" title="open debug log">Open log</button>
       <button id="send-logs" class="btn" title="upload recent logs to server">Send logs</button>
@@ -111,54 +111,17 @@
         </div>
       </div>
 
-      <div id="phone-step" class="card" style="display:none;">
-        <h2>Log in with your phone number</h2>
-        <div class="row">
-          <div>
-            <label for="phone">Phone (international format, no +, e.g. 989123456789)</label>
-            <input id="phone" type="tel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="98..." />
-          </div>
-          <button id="send-code" class="primary">Send code</button>
-        </div>
-      </div>
-
-      <div id="code-step" class="card" style="display:none;">
-        <div class="step-meta">
-          <button id="back-from-code" class="ghost" type="button">Back</button>
-          <span>Code sent to <code id="code-phone-display">-</code></span>
-          <button id="resend-code" class="link" type="button">Resend code</button>
-        </div>
-        <h2>Enter the code from the SMS</h2>
-        <div class="row">
-          <div>
-            <label for="code">Code</label>
-            <input id="code" type="text" inputmode="numeric" placeholder="123456" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-          </div>
-          <button id="verify-code" class="primary">Verify</button>
-        </div>
-      </div>
-
-      <div id="password-step" class="card" style="display:none;">
-        <div class="step-meta">
-          <button id="back-from-password" class="ghost" type="button">Back</button>
-          <span>2FA enabled on <code id="pw-phone-display">-</code></span>
-          <span></span>
-        </div>
-        <h2>Two-factor password</h2>
-        <div class="row">
-          <div>
-            <label for="password">Your Bale 2FA password</label>
-            <input id="password" type="password" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-          </div>
-          <button id="verify-password" class="primary">Verify</button>
+      <div id="config-step" class="card" style="display:none;">
+        <h2>Client config</h2>
+        <label for="client-config">Paste config from server</label>
+        <textarea id="client-config" placeholder="wtc1:..." style="min-height:90px; resize:vertical;"></textarea>
+        <div style="margin-top:10px;">
+          <button id="import-config" class="primary">Use config</button>
         </div>
       </div>
 
       <div id="picker" class="card" style="display:none;">
         <h2>Start a tunnel</h2>
-
-        <label for="peer-select">Server's Bale account</label>
-        <select id="peer-select"><option value="">- loading contacts -</option></select>
 
         <div class="row" style="margin-top:10px;">
           <div style="max-width: 110px;">
@@ -239,6 +202,7 @@
     <script>
       const $ = (id) => document.getElementById(id);
       let startedAt = null;
+      let latestStatus = null;
 
       function fmtBytes(n) {
         if (n < 1024) return n + ' B';
@@ -258,6 +222,7 @@
       }
 
       function render(status) {
+        latestStatus = status;
         $('err-card').style.display = status.lastError && !status.lastError.includes('SERVER_KEY_MISMATCH') ? 'block' : 'none';
         $('err').textContent = status.lastError || '';
         $('send-logs').disabled = status.sendLogsState === 'sending';
@@ -268,13 +233,13 @@
           $('key-mismatch-text').textContent = status.lastError.replace('SERVER_KEY_MISMATCH: ', '');
         }
 
-        $('me').textContent = status.me ? ('logged in as ' + (status.me.name || ('user ' + status.me.id))) : 'not logged in';
+        $('me').textContent = status.configClient
+          ? ('Server UUID: ' + status.configClient.serverUuid)
+          : 'config required';
         $('signout').style.display = status.loginStage === 'ready' ? 'inline-block' : 'none';
 
         const show = (id, visible) => { $(id).style.display = visible ? 'block' : 'none'; };
-        show('phone-step', status.loginStage === 'unauthenticated');
-        show('code-step', status.loginStage === 'awaiting-code');
-        show('password-step', status.loginStage === 'awaiting-password');
+        show('config-step', status.loginStage === 'unauthenticated');
         show('picker', status.loginStage === 'ready' && !status.tunnel && !status.connecting);
         show('connecting-card', !!status.connecting && !status.tunnel);
         show('connected', !!status.tunnel);
@@ -287,16 +252,10 @@
           log.scrollTop = log.scrollHeight;
         }
 
-        if (status.pendingPhone) {
-          $('code-phone-display').textContent = status.pendingPhone;
-          $('pw-phone-display').textContent = status.pendingPhone;
-          if (status.loginStage === 'unauthenticated' && !$('phone').value) $('phone').value = status.pendingPhone;
-        }
-
         if (status.tunnel) {
           startedAt = status.tunnel.startedAt;
-          const server = status.tunnel.serverLabel || 'livekit-room';
-          $('k-server').textContent = server + ' (WebRTC)';
+          const server = status.configClient?.serverUuid || status.tunnel.serverLabel || 'unknown';
+          $('k-server').textContent = server;
           $('k-socks').textContent = '127.0.0.1:' + status.tunnel.socksPort;
           $('socks-hint').textContent = status.tunnel.socksPort;
           $('k-streams').textContent = status.tunnel.streamsActive + ' / ' + status.tunnel.streamsOpened;
@@ -329,6 +288,7 @@
         try {
           const chats = await window.wt.listChats();
           const sel = $('peer-select');
+          if (!sel) return;
           sel.innerHTML = '';
           if (!chats.length) {
             sel.innerHTML = '<option value="">no contacts found — message someone on Bale first</option>';
@@ -344,40 +304,49 @@
             sel.appendChild(opt);
           }
         } catch (e) {
-          $('peer-select').innerHTML = '<option value="">error: ' + e.message + '</option>';
+          const sel = $('peer-select');
+          if (sel) sel.innerHTML = '<option value="">error: ' + e.message + '</option>';
         }
       }
 
-      $('send-code').addEventListener('click', async () => {
+      $('send-code')?.addEventListener('click', async () => {
         const phone = $('phone').value.trim();
         if (!phone) return alert('Enter a phone number');
         $('send-code').disabled = true;
         try { await window.wt.sendPhoneCode(phone); } catch (e) { alert(e.message); }
         $('send-code').disabled = false;
       });
-      $('phone').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('send-code').click(); });
+      $('import-config').addEventListener('click', async () => {
+        const config = $('client-config').value.trim();
+        if (!config) return alert('Paste a client config');
+        $('import-config').disabled = true;
+        try { await window.wt.importClientConfig(config); $('client-config').value = ''; }
+        catch (e) { alert(e.message); }
+        $('import-config').disabled = false;
+      });
+      $('phone')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('send-code')?.click(); });
 
-      $('verify-code').addEventListener('click', async () => {
+      $('verify-code')?.addEventListener('click', async () => {
         const code = $('code').value.trim();
         if (!code) return alert('Enter the code');
         $('verify-code').disabled = true;
         try { await window.wt.verifyCode(code); } catch (e) { alert(e.message); }
         $('verify-code').disabled = false;
       });
-      $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('verify-code').click(); });
+      $('code')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('verify-code')?.click(); });
 
-      $('verify-password').addEventListener('click', async () => {
+      $('verify-password')?.addEventListener('click', async () => {
         const pw = $('password').value;
         if (!pw) return alert('Enter your 2FA password');
         $('verify-password').disabled = true;
         try { await window.wt.verifyPassword(pw); } catch (e) { alert(e.message); }
         $('verify-password').disabled = false;
       });
-      $('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('verify-password').click(); });
+      $('password')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('verify-password')?.click(); });
 
-      $('back-from-code').addEventListener('click', async () => { $('code').value = ''; await window.wt.backToPhone(); });
-      $('back-from-password').addEventListener('click', async () => { $('password').value = ''; await window.wt.backToCode(); });
-      $('resend-code').addEventListener('click', async () => {
+      $('back-from-code')?.addEventListener('click', async () => { $('code').value = ''; await window.wt.backToPhone(); });
+      $('back-from-password')?.addEventListener('click', async () => { $('password').value = ''; await window.wt.backToCode(); });
+      $('resend-code')?.addEventListener('click', async () => {
         $('resend-code').disabled = true;
         try { await window.wt.resendCode(); alert('New code sent.'); } catch (e) { alert(e.message); }
         $('resend-code').disabled = false;
@@ -401,12 +370,11 @@
       $('start').addEventListener('click', async () => {
         const carrier = 'webrtc';
         const socksPort = Number($('socks-port').value);
-        const sel = $('peer-select');
-        if (!sel.value) {
-          return alert("Pick the server's Bale account");
+        if (!latestStatus?.configClient) {
+          return alert('Import a client config first.');
         }
-        const peer = JSON.parse(sel.value);
-        const serverLabel = sel.options[sel.selectedIndex].textContent;
+        const peer = null;
+        const serverLabel = latestStatus.configClient.serverUuid;
         $('start').disabled = true;
         try {
           await window.wt.startTunnel({ carrier, peer, socksPort, serverLabel });
@@ -417,6 +385,12 @@
           }
           if (msg.includes('handshake timeout')) {
             return alert('Connection timed out — server did not respond. Check the selected account and try again.');
+          }
+          if (msg.includes('CONFIG_ALREADY_CONNECTED')) {
+            return alert('This client config is already connected on another device.');
+          }
+          if (msg.includes('CONFIG_REQUIRED')) {
+            return alert('Import a client config first.');
           }
           if (msg.includes('MUX_CLOSED_DURING_START:')) {
             return alert('Tunnel closed before startup completed. Try again; if it repeats, verify server is online and the correct account is selected.');
