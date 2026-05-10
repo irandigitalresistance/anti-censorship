@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('wt', {
   backToPhone: () => ipcRenderer.invoke('auth:back-to-phone'),
   backToCode: () => ipcRenderer.invoke('auth:back-to-code'),
   signOut: () => ipcRenderer.invoke('auth:sign-out'),
+  importClientConfig: (config) => ipcRenderer.invoke('config:import', config),
   listChats: () => ipcRenderer.invoke('chats:list'),
   startTunnel: (opts) => ipcRenderer.invoke('tunnel:start', opts),
   stopTunnel: () => ipcRenderer.invoke('tunnel:stop'),

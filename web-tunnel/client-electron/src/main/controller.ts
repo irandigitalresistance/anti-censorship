@@ -10,6 +10,7 @@ import {
   PSK_SALT_INFO,
   NativeBaleSidecar,
   buildMeetOffer,
+  decodeClientConfig,
   deriveKeyFromPassword,
   deriveRoomName,
   makeBaleMeetFactory,
@@ -17,6 +18,7 @@ import {
   serverFingerprint,
   type TunnelMuxV2,
   type V2LogReport,
+  type WebTunnelClientConfigV1,
   type BaleSession,
   type ISidecar as ISidecarLike,
   type LivekitRoomFactory,
@@ -47,6 +49,11 @@ export interface ControllerStatus {
   loginStage: LoginStage;
   pendingPhone: string | null;
   me: { id: number; name: string | null; phone: string | null } | null;
+  configClient: {
+    id: string;
+    serverUuid: string;
+    serverPeer: Peer;
+  } | null;
   tunnel: null | {
     carrier: Carrier;
     peer: Peer;
@@ -112,11 +119,13 @@ const V2_HANDSHAKE_TIMEOUT_MS = 12_000;
 
 export class Controller extends EventEmitter {
   private readonly sessionFile: string;
+  private readonly configFile: string;
   private readonly keyPinsFile: string;
   private readonly logFilePath: string | null;
   private readonly client: BaleClient;
   private readonly livekitFactory: LivekitRoomFactory | null;
   private sidecar: NativeBaleSidecar | null = null;
+  private managedConfig: WebTunnelClientConfigV1 | null = null;
   private mux: TunnelMuxV2 | null = null;
   private socksServer: net.Server | null = null;
   private lastStartOpts: TunnelStartOptions | null = null;
@@ -132,6 +141,7 @@ export class Controller extends EventEmitter {
     loginStage: 'unauthenticated',
     pendingPhone: null,
     me: null,
+    configClient: null,
     tunnel: null,
     connecting: null,
     retryState: 'idle',
@@ -145,6 +155,7 @@ export class Controller extends EventEmitter {
   constructor(opts: ControllerOptions = {}) {
     super();
     this.sessionFile = opts.sessionFile ?? defaultSessionFile();
+    this.configFile = path.join(path.dirname(this.sessionFile), 'client-config.json');
     this.keyPinsFile = path.join(path.dirname(this.sessionFile), 'server-key-pins.json');
     this.logFilePath = opts.logFilePath ?? null;
     this.client = new BaleClient();
@@ -186,6 +197,7 @@ export class Controller extends EventEmitter {
       this.demoListChats = opts.listChats;
     }
     this.status.me = opts.me;
+    this.status.configClient = null;
     this.status.loginStage = 'ready';
     this.status.lastError = null;
     this.pendingTransactionHash = null;
@@ -195,27 +207,64 @@ export class Controller extends EventEmitter {
   private demoListChats: (() => Promise<ReadonlyArray<{ chat_id: number; chat_type: string; title: string; username: string | null; unread: number; last_message: string | null }>>) | null = null;
 
   init(): void {
-    // If we have a saved session, hydrate and jump to "ready".
-    if (fs.existsSync(this.sessionFile)) {
-      try {
-        const raw = JSON.parse(fs.readFileSync(this.sessionFile, 'utf8'));
-        const session: BaleSession = {
-          jwt: raw.jwt,
-          userId: BigInt(raw.userId),
-          userName: raw.userName ?? null,
-          userAccessHash: BigInt(raw.userAccessHash),
-        };
-        this.client.loadSession(session);
-        this.onAuthenticated(session);
-      } catch (e) {
-        this.status.lastError = `failed to load saved session: ${(e as Error).message}`;
-      }
+    if (fs.existsSync(this.configFile)) {
+      void this.loadSavedClientConfig()
+        .catch((e) => {
+          this.status.lastError = `failed to load saved client config: ${(e as Error).message}`;
+          this.emitStatus();
+        });
+      this.emitStatus();
+      return;
     }
     this.emitStatus();
   }
 
   getStatus(): ControllerStatus {
     return structuredClone(this.status);
+  }
+
+  async importClientConfig(rawConfig: string): Promise<void> {
+    const payload = await decodeClientConfig(rawConfig);
+    this.applyClientConfig(payload);
+    fs.writeFileSync(this.configFile, JSON.stringify({ config: rawConfig }, null, 2));
+    this.emitStatus();
+  }
+
+  private async loadSavedClientConfig(): Promise<void> {
+    const raw = JSON.parse(fs.readFileSync(this.configFile, 'utf8')) as { config?: string };
+    if (!raw.config) throw new Error('saved config missing config string');
+    const payload = await decodeClientConfig(raw.config);
+    this.applyClientConfig(payload);
+    this.emitStatus();
+  }
+
+  private applyClientConfig(payload: WebTunnelClientConfigV1): void {
+    this.managedConfig = payload;
+    const session: BaleSession = {
+      jwt: payload.baleSession.jwt,
+      userId: BigInt(payload.baleSession.userId),
+      userName: payload.baleSession.userName,
+      userAccessHash: BigInt(payload.baleSession.userAccessHash),
+    };
+    this.client.loadSession(session);
+    this.sidecar = new NativeBaleSidecar({ client: this.client });
+    this.status.loginStage = 'ready';
+    this.status.pendingPhone = null;
+    this.status.me = {
+      id: Number(session.userId),
+      name: null,
+      phone: null,
+    };
+    this.status.configClient = {
+      id: payload.clientId,
+      serverUuid: payload.serverUuid,
+      serverPeer: {
+        chatId: payload.serverPeer.chatId,
+        chatType: payload.serverPeer.chatType,
+      },
+    };
+    this.status.lastError = null;
+    this.pendingTransactionHash = null;
   }
 
   async sendPhoneCode(phone: string): Promise<void> {
@@ -337,10 +386,13 @@ export class Controller extends EventEmitter {
       this.sidecar = null;
     }
     if (fs.existsSync(this.sessionFile)) fs.unlinkSync(this.sessionFile);
+    if (fs.existsSync(this.configFile)) fs.unlinkSync(this.configFile);
+    this.managedConfig = null;
     this.status = {
       loginStage: 'unauthenticated',
       pendingPhone: null,
       me: null,
+      configClient: null,
       tunnel: null,
       connecting: null,
       retryState: 'idle',
@@ -356,6 +408,16 @@ export class Controller extends EventEmitter {
 
   async listChats(limit = 40): Promise<Array<{ chat_id: number; chat_type: string; title: string; username: string | null; unread: number; last_message: string | null }>> {
     console.log(`[controller] listChats limit=${limit}`);
+    if (this.managedConfig) {
+      return [{
+        chat_id: this.managedConfig.serverPeer.chatId,
+        chat_type: this.managedConfig.serverPeer.chatType,
+        title: this.managedConfig.serverUuid,
+        username: null,
+        unread: 0,
+        last_message: null,
+      }];
+    }
     if (this.demoListChats) {
       return [...(await this.demoListChats())];
     }
@@ -395,11 +457,13 @@ export class Controller extends EventEmitter {
       throw new Error(`unsupported Windows carrier: ${String(startOpts.carrier)}`);
     }
 
+    const config = this.managedConfig;
+    if (!config) throw new Error('import a client config first');
     const normalized: TunnelStartOptions = {
       carrier: 'webrtc',
-      peer: startOpts.peer,
+      peer: { chatId: config.serverPeer.chatId, chatType: config.serverPeer.chatType },
       socksPort: startOpts.socksPort,
-      serverLabel: startOpts.serverLabel,
+      serverLabel: config.serverUuid,
       password: startOpts.password,
     };
     this.lastStartOpts = normalized;
@@ -548,7 +612,7 @@ export class Controller extends EventEmitter {
     try {
       tunnelResult = await withTimeout(
         runClientTunnelV2(transport, {
-          metadata: { clientType: 'windows', clientVersion: APP_VERSION },
+          metadata: this.clientMetadata(),
           onServerIdentity: ({ publicKey, fingerprint }) => {
             this.assertServerIdentityTrusted(keyId, publicKey, fingerprint);
           },
@@ -712,6 +776,9 @@ export class Controller extends EventEmitter {
     if (error.message.includes('SERVER_KEY_MISMATCH')) return false;
     if (error.message.includes('SOCKS_PORT_IN_USE')) return false;
     if (error.message.includes('SOCKS_PORT_UNAVAILABLE')) return false;
+    if (error.message.includes('CONFIG_ALREADY_CONNECTED')) return false;
+    if (error.message.includes('CONFIG_REQUIRED')) return false;
+    if (error.message.includes('CONFIG_UNKNOWN_CLIENT')) return false;
     return true;
   }
 
@@ -780,6 +847,15 @@ export class Controller extends EventEmitter {
   ): void {
     const expected = serverFingerprint(publicKey);
     if (expected !== fingerprint) throw new Error('server fingerprint verification failed (internal error)');
+    if (this.managedConfig?.serverFingerprint && this.managedConfig.serverFingerprint !== fingerprint) {
+      this.status.keyTrustState = 'mismatch';
+      this.status.lastError =
+        `SERVER_KEY_MISMATCH: The config was issued for a different server key.\n` +
+        `Expected: ${this.managedConfig.serverFingerprint.slice(0, 16)}...\n` +
+        `Got:      ${fingerprint.slice(0, 16)}...`;
+      this.emitStatus();
+      throw new Error('SERVER_KEY_MISMATCH');
+    }
     // Carrier-neutral pin scheme: key by `fp:<hex>` of the server's Ed25519
     // public key. Same key is used regardless of which carrier reached the
     // server. Migration: a same-fingerprint match against the
@@ -823,6 +899,18 @@ export class Controller extends EventEmitter {
       console.log(`[controller] migrated legacy pin ${keyId} → ${fpKey}`);
     }
     this.status.keyTrustState = 'trusted';
+  }
+
+  private clientMetadata(): Record<string, string | number> {
+    const metadata: Record<string, string | number> = {
+      clientType: 'windows',
+      clientVersion: APP_VERSION,
+    };
+    if (this.managedConfig) {
+      metadata.webTunnelClientId = this.managedConfig.clientId;
+      metadata.webTunnelConfigVersion = 1;
+    }
+    return metadata;
   }
 
   private serverKeyId(peer: Peer): string {
@@ -881,7 +969,7 @@ export class Controller extends EventEmitter {
     const keyId = this.serverKeyId(effectivePeer);
     const tunnel = await withTimeout(
       runClientTunnelV2(transport, {
-        metadata: { clientType: 'windows', clientVersion: APP_VERSION },
+        metadata: this.clientMetadata(),
         onServerIdentity: ({ publicKey, fingerprint }) => {
           this.assertServerIdentityTrusted(keyId, publicKey, fingerprint);
         },
@@ -1045,12 +1133,14 @@ export class Controller extends EventEmitter {
 
   private onAuthenticated(session: BaleSession): void {
     this.sidecar = new NativeBaleSidecar({ client: this.client });
+    this.managedConfig = null;
     this.status.loginStage = 'ready';
     this.status.me = {
       id: Number(session.userId),
       name: session.userName,
       phone: null,
     };
+    this.status.configClient = null;
     this.status.lastError = null;
     this.pendingTransactionHash = null;
     this.emitStatus();

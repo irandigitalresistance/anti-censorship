@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline';" />
-    <title>Web Tunnel Server v0.3-beta</title>
+    <title>Web Tunnel Server v0.4.0-beta</title>
     <style>
       :root {
         --bg: #0e0f12;
@@ -26,7 +26,8 @@
       .card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; }
       .card h2 { margin: 0 0 10px; font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
       label { display: block; margin: 6px 0 3px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-      input, button { font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; width: 100%; }
+      input, textarea, button { font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; width: 100%; }
+      textarea { min-height: 92px; resize: vertical; user-select: text; }
       button { cursor: pointer; width: auto; padding: 8px 18px; }
       button.primary { background: var(--accent); color: #08211a; border-color: var(--accent); font-weight: 500; }
       button.danger { background: transparent; color: var(--err); border-color: var(--err); }
@@ -44,6 +45,8 @@
       .kpi .item span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
       .muted { color: var(--muted); }
       .step-sub { color: var(--muted); font-size: 11px; margin-top: 4px; }
+      .split-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .split-actions button { flex: 0 0 auto; }
       code { background: var(--bg); padding: 2px 5px; border-radius: 3px; font-size: 11px; border: 1px solid var(--border); }
       .section-title { margin: 16px 0 10px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
 
@@ -77,7 +80,7 @@
   </head>
   <body>
     <header>
-      <h1>web-tunnel server v0.3-beta</h1>
+      <h1>web-tunnel server v0.4.0-beta</h1>
       <div id="me" class="me">not logged in</div>
       <button id="open-log" class="btn" title="open debug log">Open log</button>
       <button id="signout" class="btn" style="display:none;">Sign out</button>
@@ -89,7 +92,7 @@
       </div>
 
       <div id="phone-step" class="card" style="display:none;">
-        <h2>Log in with your phone number</h2>
+        <h2>Server account</h2>
         <div class="row">
           <div><label for="phone">Phone (international format, no +, e.g. 989123456789)</label>
             <input id="phone" type="tel" autocomplete="off" placeholder="98..." /></div>
@@ -125,6 +128,62 @@
         </div>
       </div>
 
+      <div id="client-auth" class="card" style="display:none;">
+        <h2>Client account</h2>
+        <div id="client-ready" class="step-sub" style="display:none;">
+          <span id="client-me">not logged in</span>
+          <button id="client-signout" class="link" style="margin-left:10px;">Sign out client account</button>
+        </div>
+        <div id="client-phone-step">
+          <div class="row">
+            <div><label for="client-phone">Phone (international format, no +)</label>
+              <input id="client-phone" type="tel" autocomplete="off" placeholder="98..." /></div>
+            <button id="client-send-code" class="primary">Send code</button>
+          </div>
+        </div>
+        <div id="client-code-step" style="display:none;">
+          <div class="step-meta">
+            <button id="client-back-from-code" class="ghost">Back</button>
+            <span>Code sent to <code id="client-code-phone-display">-</code></span>
+            <button id="client-resend-code" class="link">Resend code</button>
+          </div>
+          <div class="row">
+            <div><label for="client-code">Code</label>
+              <input id="client-code" type="text" inputmode="numeric" placeholder="123456" /></div>
+            <button id="client-verify-code" class="primary">Verify</button>
+          </div>
+        </div>
+        <div id="client-password-step" style="display:none;">
+          <div class="step-meta">
+            <button id="client-back-from-password" class="ghost">Back</button>
+            <span>2FA enabled on <code id="client-pw-phone-display">-</code></span>
+            <span></span>
+          </div>
+          <div class="row">
+            <div><label for="client-password">Client account 2FA password</label>
+              <input id="client-password" type="password" /></div>
+            <button id="client-verify-password" class="primary">Verify</button>
+          </div>
+        </div>
+        <div class="step-sub">New Android and Windows clients use this Bale account from their encrypted config.</div>
+      </div>
+
+      <div id="clients-card" class="card" style="display:none;">
+        <h2>Create client</h2>
+        <div class="row">
+          <div><label for="client-name">Unique name</label>
+            <input id="client-name" type="text" autocomplete="off" placeholder="alice-phone" /></div>
+          <button id="create-client" class="primary">Create client</button>
+        </div>
+        <div id="created-config-wrap" style="display:none; margin-top:10px;">
+          <label for="created-config">Generated config</label>
+          <textarea id="created-config" readonly></textarea>
+          <div class="split-actions" style="margin-top:8px;">
+            <button id="copy-created-config" class="ghost">Copy config</button>
+          </div>
+        </div>
+      </div>
+
       <div id="picker" class="card" style="display:none;">
         <h2>Start the server</h2>
         <div class="row">
@@ -149,9 +208,9 @@
       <!-- Users list — always visible after login. Shows every account that
            has ever connected with persistent up/down/total counters. -->
       <div id="users-card" class="card" style="display:none;">
-        <h2>Users</h2>
+        <h2>Clients</h2>
         <div id="connections-list"></div>
-        <div id="connections-empty" class="step-sub">No users yet — start the server and have someone connect.</div>
+        <div id="connections-empty" class="step-sub">No clients yet. Create a client config and have it connect.</div>
       </div>
 
       <div id="logs-card" class="card" style="display:none;">
@@ -208,7 +267,7 @@
 
       function setBusy(value) {
         busy = value;
-        ['send-code','verify-code','verify-password','resend-code','start','stop','signout']
+        ['send-code','verify-code','verify-password','resend-code','client-send-code','client-verify-code','client-verify-password','client-resend-code','start','stop','signout','create-client']
           .forEach((id) => { if ($(id)) $(id).disabled = !!value; });
       }
 
@@ -315,6 +374,84 @@
         }).join('');
       }
 
+      function renderConnectionItems(conns) {
+        return conns.map((conn) => {
+          const streamDetails = conn.streams && conn.streams.length
+            ? conn.streams.slice(0, 3).map((s) =>
+                '<div class="stream">' + esc(s.target) + ' - up ' + fmtBytes(s.bytesUp) + ' | down ' + fmtBytes(s.bytesDown) + '</div>'
+              ).join('') +
+              (conn.streams.length > 3 ? '<div class="stream">+' + (conn.streams.length - 3) + ' more streams</div>' : '')
+            : '';
+          const action = conn.terminable
+            ? '<button class="link terminate-btn" data-conn-id="' + esc(conn.id) + '" style="margin-left:8px;">Terminate</button>'
+            : '';
+          return (
+            '<div class="conn-item">' +
+              '<div class="conn-row">' +
+                '<span class="conn-label">' +
+                  esc(clientTypeLabel(conn.clientType, conn.clientVersion)) + ' - ' +
+                  esc(carrierLabel(conn.carrier)) + ' - v' + esc(conn.protocolVersion ?? '?') +
+                  ' - ' + esc(conn.terminationState || 'active') +
+                  action +
+                '</span>' +
+                '<div class="conn-stats">' +
+                  '<span><span class="val">' + conn.streamsActive + '/' + conn.streamsOpened + '</span> streams</span>' +
+                  '<span>up <span class="val">' + fmtBytes(conn.bytesUp) + '</span></span>' +
+                  '<span>down <span class="val">' + fmtBytes(conn.bytesDown) + '</span></span>' +
+                  '<span><span class="val" data-opened-at="' + conn.openedAt + '">' + fmtDuration(Date.now() - conn.openedAt) + '</span></span>' +
+                '</div>' +
+              '</div>' +
+              (streamDetails ? '<div class="conn-streams">' + streamDetails + '</div>' : '') +
+            '</div>'
+          );
+        }).join('') || '<div class="conn-item"><span class="muted" style="font-size:11px;">No active connections</span></div>';
+      }
+
+      function renderClients(users, connections, clients, clientAccount) {
+        const list = $('connections-list');
+        const empty = $('connections-empty');
+        connections = connections || [];
+        clients = clients || [];
+        if (clients.length === 0) {
+          list.innerHTML = '';
+          empty.style.display = 'block';
+          return;
+        }
+        empty.style.display = 'none';
+        const connById = new Map();
+        for (const c of connections) connById.set(c.id, c);
+        const managed = clients.slice().sort((a, b) => {
+          if ((b.activeConnections > 0) !== (a.activeConnections > 0)) {
+            return (b.activeConnections > 0 ? 1 : 0) - (a.activeConnections > 0 ? 1 : 0);
+          }
+          return a.createdAt - b.createdAt;
+        });
+        const managedHtml = managed.map((client) => {
+          const conns = (client.activeTunnelIds || []).map((id) => connById.get(id)).filter(Boolean);
+          const state = client.activeConnections > 0
+            ? conns.length + (conns.length === 1 ? ' active connection' : ' active connections')
+            : (client.lastSeen ? 'idle for ' + fmtDuration(Date.now() - client.lastSeen) : 'never connected');
+          return (
+            '<div class="account-group">' +
+              '<div class="account-header">' +
+                '<div>' +
+                  '<div class="account-name">' + esc(client.name) + '</div>' +
+                  '<div class="account-badge">managed config - ' + esc(state) + '</div>' +
+                '</div>' +
+                '<div class="account-metrics">' +
+                  '<div class="metric"><span class="val">up ' + fmtBytes(client.bytesUp) + '</span><span class="lbl">Up</span></div>' +
+                  '<div class="metric"><span class="val">down ' + fmtBytes(client.bytesDown) + '</span><span class="lbl">Down</span></div>' +
+                  '<div class="metric"><span class="val">total ' + fmtBytes(client.totalBytes) + '</span><span class="lbl">Total</span></div>' +
+                  '<button class="link copy-config-btn" data-config="' + esc(client.config) + '" style="margin-left:8px; align-self:center;">Copy config</button>' +
+                '</div>' +
+              '</div>' +
+              renderConnectionItems(conns) +
+            '</div>'
+          );
+        }).join('');
+        list.innerHTML = managedHtml;
+      }
+
       function renderLogs(logs) {
         const body = $('logs-body');
         const table = $('logs-table');
@@ -348,29 +485,46 @@
       }
 
       function render(status) {
-        $('err-card').style.display = status.lastError ? 'block' : 'none';
-        $('err').textContent = status.lastError || '';
-        $('me').textContent = status.me ? ('logged in as ' + (status.me.name || 'user ' + status.me.id)) : 'not logged in';
-        $('signout').style.display = status.loginStage === 'ready' ? 'inline-block' : 'none';
-        $('fingerprint').textContent = status.serverFingerprint
-          ? ('Server key fingerprint: ' + status.serverFingerprint)
+        const server = status.serverAccount || { loginStage: status.loginStage, pendingPhone: status.pendingPhone, me: status.me, lastError: status.lastError };
+        const client = status.clientAccount || { loginStage: 'unauthenticated', pendingPhone: null, me: null, lastError: null };
+        const errorText = status.lastError || server.lastError || client.lastError || '';
+        $('err-card').style.display = errorText ? 'block' : 'none';
+        $('err').textContent = errorText;
+        const serverLabel = server.me ? ('server: ' + (server.me.name || 'user ' + server.me.id)) : 'server not logged in';
+        const clientLabel = client.me ? ('client: ' + (client.me.name || 'user ' + client.me.id)) : 'client not logged in';
+        $('me').textContent = serverLabel + ' | ' + clientLabel;
+        $('signout').style.display = server.loginStage === 'ready' ? 'inline-block' : 'none';
+        $('fingerprint').textContent = status.serverUuid
+          ? ('Server UUID: ' + status.serverUuid)
           : '';
 
         const show = (id, v) => { $(id).style.display = v ? 'block' : 'none'; };
-        show('phone-step', status.loginStage === 'unauthenticated');
-        show('code-step', status.loginStage === 'awaiting-code');
-        show('password-step', status.loginStage === 'awaiting-password');
-        show('picker', status.loginStage === 'ready' && !status.running);
+        show('phone-step', server.loginStage === 'unauthenticated');
+        show('code-step', server.loginStage === 'awaiting-code');
+        show('password-step', server.loginStage === 'awaiting-password');
+        show('client-auth', true);
+        show('client-phone-step', client.loginStage === 'unauthenticated');
+        show('client-code-step', client.loginStage === 'awaiting-code');
+        show('client-password-step', client.loginStage === 'awaiting-password');
+        show('client-ready', client.loginStage === 'ready');
+        $('client-me').textContent = client.me ? ('logged in as ' + (client.me.name || 'user ' + client.me.id)) : 'not logged in';
+        show('clients-card', server.loginStage === 'ready' && client.loginStage === 'ready');
+        show('picker', server.loginStage === 'ready' && !status.running);
         show('running', status.running);
         // Users + log uploads are always visible after login — operator can
         // still inspect / reset users while the server is stopped.
-        show('users-card', status.loginStage === 'ready');
-        show('logs-card', status.loginStage === 'ready');
+        show('users-card', server.loginStage === 'ready');
+        show('logs-card', server.loginStage === 'ready');
 
-        if (status.pendingPhone) {
-          $('code-phone-display').textContent = status.pendingPhone;
-          $('pw-phone-display').textContent = status.pendingPhone;
-          if (status.loginStage === 'unauthenticated' && !$('phone').value) $('phone').value = status.pendingPhone;
+        if (server.pendingPhone) {
+          $('code-phone-display').textContent = server.pendingPhone;
+          $('pw-phone-display').textContent = server.pendingPhone;
+          if (server.loginStage === 'unauthenticated' && !$('phone').value) $('phone').value = server.pendingPhone;
+        }
+        if (client.pendingPhone) {
+          $('client-code-phone-display').textContent = client.pendingPhone;
+          $('client-pw-phone-display').textContent = client.pendingPhone;
+          if (client.loginStage === 'unauthenticated' && !$('client-phone').value) $('client-phone').value = client.pendingPhone;
         }
 
         if (status.running) {
@@ -381,13 +535,13 @@
           $('k-down').textContent = fmtBytes(status.bytesDown);
           $('k-total').textContent = fmtBytes((status.lifetimeBytesUp || 0) + (status.lifetimeBytesDown || 0));
           $('k-since').textContent = fmtDuration(Date.now() - status.startedAt);
-          renderUsers(status.users || [], status.connections || []);
+          renderClients(status.users || [], status.connections || [], status.clientProfiles || [], client);
           renderLogs(status.logs || []);
         } else {
           startedAt = null;
           // Even when the server isn't running, keep showing the persistent
           // user list so the operator can still inspect or reset accounts.
-          renderUsers(status.users || [], []);
+          renderClients(status.users || [], [], status.clientProfiles || [], client);
           renderLogs(status.logs || []);
         }
       }
@@ -428,15 +582,69 @@
         setBusy(false);
       });
 
+      $('client-send-code').addEventListener('click', async () => {
+        const p = $('client-phone').value.trim();
+        if (!p) return alert('Enter a phone number');
+        setBusy(true);
+        try { await window.wt.sendPhoneCode(p, 'client'); } catch (e) { alert(e.message); }
+        setBusy(false);
+      });
+      $('client-phone').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('client-send-code').click(); });
+      $('client-verify-code').addEventListener('click', async () => {
+        const c = $('client-code').value.trim();
+        if (!c) return alert('Enter the code');
+        setBusy(true);
+        try { await window.wt.verifyCode(c, 'client'); } catch (e) { alert(e.message); }
+        setBusy(false);
+      });
+      $('client-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('client-verify-code').click(); });
+      $('client-verify-password').addEventListener('click', async () => {
+        const pw = $('client-password').value;
+        if (!pw) return alert('Enter 2FA password');
+        setBusy(true);
+        try { await window.wt.verifyPassword(pw, 'client'); } catch (e) { alert(e.message); }
+        setBusy(false);
+      });
+      $('client-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('client-verify-password').click(); });
+      $('client-back-from-code').addEventListener('click', async () => { $('client-code').value=''; await window.wt.backToPhone('client'); });
+      $('client-back-from-password').addEventListener('click', async () => { $('client-password').value=''; await window.wt.backToCode('client'); });
+      $('client-resend-code').addEventListener('click', async () => {
+        setBusy(true);
+        try { await window.wt.resendCode('client'); alert('New code sent.'); } catch (e) { alert(e.message); }
+        setBusy(false);
+      });
+      $('client-signout').addEventListener('click', async () => {
+        if (!confirm('Sign out the managed client Bale account? Existing configs will keep their embedded session.')) return;
+        await window.wt.signOut('client');
+      });
+
       $('signout').addEventListener('click', async () => {
         if (!confirm('Sign out and forget the saved session?')) return;
-        await window.wt.signOut();
+        await window.wt.signOut('server');
       });
 
       $('start').addEventListener('click', async () => {
         setBusy(true);
         try { await window.wt.startServer(''); } catch (e) { alert(e.message); }
         setBusy(false);
+      });
+      $('create-client').addEventListener('click', async () => {
+        const name = $('client-name').value.trim();
+        if (!name) return alert('Enter a unique client name');
+        $('create-client').disabled = true;
+        try {
+          const client = await window.wt.createClient(name);
+          $('created-config').value = client.config;
+          $('created-config-wrap').style.display = 'block';
+          $('client-name').value = '';
+        } catch (e) {
+          alert(e.message);
+        } finally {
+          $('create-client').disabled = false;
+        }
+      });
+      $('copy-created-config').addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText($('created-config').value); } catch {}
       });
       $('stop').addEventListener('click', async () => { await window.wt.stopServer(); });
       $('open-log').addEventListener('click', async () => { try { await window.wt.openLog(); } catch (e) { alert('openLog failed: ' + e.message); } });
@@ -449,6 +657,11 @@
           if (!confirm('Terminate this connection now?')) return;
           try { await window.wt.terminateConnection(connId, 'terminated by dashboard operator'); }
           catch (e) { alert(e.message); }
+          return;
+        }
+        const config = target.getAttribute('data-config');
+        if (config) {
+          try { await navigator.clipboard.writeText(config); } catch {}
           return;
         }
         const peerKey = target.getAttribute('data-peer-key');

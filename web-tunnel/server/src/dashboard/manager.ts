@@ -19,6 +19,12 @@ export interface TunnelSummary {
   clientType: string | null;
   /** Free-form client version string, e.g. '0.2.0'. */
   clientVersion: string | null;
+  /** Managed config client id. Null means an older Bale-account client. */
+  clientId: string | null;
+  /** Human-readable managed client name created on the server. */
+  clientName: string | null;
+  /** managed = server-issued config; legacy = Bale-account client. */
+  clientKind: 'managed' | 'legacy' | null;
   openedAt: number;
   closedAt: number | null;
   closeReason: string | null;
@@ -89,6 +95,9 @@ export interface TunnelMeta {
   terminable?: boolean;
   clientType?: string | null;
   clientVersion?: string | null;
+  clientId?: string | null;
+  clientName?: string | null;
+  clientKind?: 'managed' | 'legacy' | null;
 }
 
 export interface TunnelUpdate {
@@ -100,6 +109,9 @@ export interface TunnelUpdate {
   terminationState?: 'idle' | 'terminating' | 'terminated' | 'failed';
   clientType?: string | null;
   clientVersion?: string | null;
+  clientId?: string | null;
+  clientName?: string | null;
+  clientKind?: 'managed' | 'legacy' | null;
 }
 
 /**
@@ -228,6 +240,9 @@ export class TunnelManager extends EventEmitter {
       peer: meta.peer ? clonePeer(meta.peer) : null,
       clientType: meta.clientType ?? null,
       clientVersion: meta.clientVersion ?? null,
+      clientId: meta.clientId ?? null,
+      clientName: meta.clientName ?? null,
+      clientKind: meta.clientKind ?? null,
       openedAt,
       closedAt: null,
       closeReason: null,
@@ -338,6 +353,9 @@ export class TunnelManager extends EventEmitter {
     if (patch.terminationState !== undefined) state.summary.terminationState = patch.terminationState;
     if (patch.clientType !== undefined) state.summary.clientType = patch.clientType;
     if (patch.clientVersion !== undefined) state.summary.clientVersion = patch.clientVersion;
+    if (patch.clientId !== undefined) state.summary.clientId = patch.clientId;
+    if (patch.clientName !== undefined) state.summary.clientName = patch.clientName;
+    if (patch.clientKind !== undefined) state.summary.clientKind = patch.clientKind;
     // If the dispatcher resolved the peer's name later, refresh the user
     // record so the dashboard label catches up.
     if (patch.peer !== undefined) this.touchUser(patch);

@@ -14,6 +14,7 @@ import {
   type Peer,
   type StartCallResult,
   type Transport,
+  type V2ClientMetadata,
 } from '@webtunnel/shared';
 import { runServerTunnel, runServerTunnelV2 } from '../tunnel.js';
 import type { TunnelHandle, TunnelManager, TunnelPeerSummary } from '../dashboard/manager.js';
@@ -41,6 +42,7 @@ export interface BaleServerDispatcherOptions {
   meetZeroTransferTimeoutMs?: number;
   protocolVersion?: 1 | 2;
   identity?: V2ServerIdentity;
+  onClientMetadata?: (metadata: V2ClientMetadata | null, tunnelId: string | null) => void | Promise<void>;
   onLogReport?: (report: V2LogReport, tunnelId: string | null) => void;
   /** Label prefix for chat-carried tunnels in dashboards/logs. Defaults to `bale`. */
   chatCarrierLabel?: string;
@@ -118,6 +120,8 @@ export class BaleServerDispatcher {
       protocolVersion?: 1 | 2;
       /** Required when protocolVersion=2. */
       identity?: V2ServerIdentity;
+      /** Optional gate for v2 client metadata (managed-client admission, duplicate detection). */
+      onClientMetadata?: (metadata: V2ClientMetadata | null, tunnelId: string | null) => void | Promise<void>;
       /** Optional server callback for client-uploaded logs. */
       onLogReport?: (report: V2LogReport, tunnelId: string | null) => void;
       /** Label prefix for chat-carried tunnels in dashboards/logs. Defaults to `bale`. */
@@ -365,6 +369,7 @@ export class BaleServerDispatcher {
       ? runServerTunnelV2(transport, {
           identity: requireV2Identity(this.opts.identity),
           handle: trackedHandle,
+          onClientMetadata: this.opts.onClientMetadata,
           onLogReport: this.opts.onLogReport,
           disableHeartbeat: this.opts.chatDisableHeartbeat,
         }).then((res) => res.mux)
@@ -579,6 +584,7 @@ export class BaleServerDispatcher {
       ? runServerTunnelV2(transport, {
           identity: requireV2Identity(this.opts.identity),
           handle: trackedHandle,
+          onClientMetadata: this.opts.onClientMetadata,
           onLogReport: this.opts.onLogReport,
         }).then((res) => res.mux)
       : runServerTunnel(transport, this.psk, { handle: trackedHandle });

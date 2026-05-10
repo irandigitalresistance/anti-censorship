@@ -242,6 +242,18 @@ class MainActivity : AppCompatActivity() {
   }
 
   private fun setupActions() {
+    binding.importConfig.setOnClickListener {
+      val config = binding.clientConfig.text?.toString()?.trim().orEmpty()
+      if (config.isBlank()) {
+        render(uiState.copy(lastError = "Paste a client config"))
+        return@setOnClickListener
+      }
+      lifecycleScope.launch {
+        controller.importClientConfig(config)
+        binding.clientConfig.setText("")
+      }
+    }
+
     binding.sendCode.setOnClickListener {
       val phone = binding.phone.text?.toString()?.trim().orEmpty()
       if (phone.isBlank()) {
@@ -298,7 +310,7 @@ class MainActivity : AppCompatActivity() {
       val socksPort = binding.socksPort.text?.toString()?.toIntOrNull() ?: 1080
       val selected = binding.chatSelect.selectedItem as? ChatOption
       if (selected == null) {
-        render(uiState.copy(lastError = "Pick the server's Bale account"))
+        render(uiState.copy(lastError = "Import a client config first"))
         return@setOnClickListener
       }
       ensureVpnPermissionAndStart(
@@ -375,12 +387,15 @@ class MainActivity : AppCompatActivity() {
     binding.errCard.isVisible = !state.lastError.isNullOrBlank()
     binding.err.text = state.lastError.orEmpty()
 
-    binding.me.text = state.meLabel ?: getString(R.string.not_logged_in)
+    binding.me.text = state.configClient?.let { "Server UUID: ${it.serverUuid}" }
+      ?: state.meLabel
+      ?: getString(R.string.not_logged_in)
     invalidateOptionsMenu()
 
-    binding.phoneStep.isVisible = state.loginStage == LoginStage.UNAUTHENTICATED
-    binding.codeStep.isVisible = state.loginStage == LoginStage.AWAITING_CODE
-    binding.passwordStep.isVisible = state.loginStage == LoginStage.AWAITING_PASSWORD
+    binding.configStep.isVisible = state.loginStage == LoginStage.UNAUTHENTICATED
+    binding.phoneStep.isVisible = false
+    binding.codeStep.isVisible = false
+    binding.passwordStep.isVisible = false
     val connecting = state.connectingEvents != null
     binding.picker.isVisible = state.loginStage == LoginStage.READY && state.tunnel == null && !connecting
     binding.connectingCard.isVisible = connecting
@@ -395,6 +410,7 @@ class MainActivity : AppCompatActivity() {
 
     val busy = state.busy
     binding.sendCode.isEnabled = !busy
+    binding.importConfig.isEnabled = !busy
     binding.verifyCode.isEnabled = !busy
     binding.verifyPassword.isEnabled = !busy
     binding.start.isEnabled = !busy

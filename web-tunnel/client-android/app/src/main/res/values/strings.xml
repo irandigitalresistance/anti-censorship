@@ -1,11 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="app_name">Web Tunnel v0.2.2</string>
-  <string name="header_title">web-tunnel v0.2.2</string>
+  <string name="app_name">Web Tunnel v0.4.0-beta</string>
+  <string name="header_title">web-tunnel v0.4.0-beta</string>
   <string name="not_logged_in">not logged in</string>
   <string name="open_log">Open log</string>
   <string name="sign_out">Sign out</string>
   <string name="error_title">Error</string>
+  <string name="config_title">Client config</string>
+  <string name="config_hint">Paste config from server</string>
+  <string name="import_config">Use config</string>
   <string name="login_title">Log in with your phone number</string>
   <string name="phone_hint">Phone (international format, no +, e.g. 989123456789)</string>
   <string name="phone_sub">Bale will SMS an OTP to this number.</string>

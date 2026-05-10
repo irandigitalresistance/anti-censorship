@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { MockBalBus, MockSidecar } from '@webtunnel/shared';
+import { MockBalBus, MockSidecar, type BaleSession } from '@webtunnel/shared';
 import { Controller } from '../../client-electron/src/main/controller';
 import { buildLivekitFactory } from '../../client-electron/src/main/livekit-factory-wiring';
 import { ServerController, type ServerStatus } from '../../server-electron/src/main/controller';
@@ -103,10 +103,41 @@ describe('latest electron server/client with mock webrtc', () => {
     let client: Controller | null = null;
 
     try {
-      const serverMutable = server as unknown as { sidecar: MockSidecar; status: ServerStatus };
+      const serverSession: BaleSession = {
+        jwt: 'server-jwt',
+        userId: 500n,
+        userName: 'server',
+        userAccessHash: 5000n,
+      };
+      const clientAccountSession: BaleSession = {
+        jwt: 'client-jwt',
+        userId: 700n,
+        userName: 'client',
+        userAccessHash: 7000n,
+      };
+      const serverMutable = server as unknown as {
+        sidecar: MockSidecar;
+        status: ServerStatus;
+        client: { loadSession(session: BaleSession): void };
+        configClient: { loadSession(session: BaleSession): void };
+      };
+      serverMutable.client.loadSession(serverSession);
+      serverMutable.configClient.loadSession(clientAccountSession);
       serverMutable.sidecar = serverSidecar;
       serverMutable.status.loginStage = 'ready';
       serverMutable.status.me = { id: 500, name: 'server', phone: null };
+      serverMutable.status.serverAccount = {
+        loginStage: 'ready',
+        pendingPhone: null,
+        me: { id: 500, name: 'server', phone: null },
+        lastError: null,
+      };
+      serverMutable.status.clientAccount = {
+        loginStage: 'ready',
+        pendingPhone: null,
+        me: { id: 700, name: 'client', phone: null },
+        lastError: null,
+      };
 
       await server.startServer('secret');
       const serverFingerprint = server.getStatus().serverFingerprint;
@@ -120,25 +151,14 @@ describe('latest electron server/client with mock webrtc', () => {
         livekitFactory: buildLivekitFactory() ?? undefined,
       });
 
-      client.useDemoSession({
-        me: { id: 700, name: 'client', phone: null },
-        sidecar: clientSidecar,
-        listChats: async () => [{
-          chat_id: 500,
-          chat_type: 'PRIVATE',
-          title: 'server',
-          username: null,
-          unread: 0,
-          last_message: null,
-        }],
-      });
+      const managedClient = await server.createClient('test client');
+      await client.importClientConfig(managedClient.config);
+      (client as unknown as { sidecar: MockSidecar }).sidecar = clientSidecar;
 
       const socksPort = await freePort();
       await client.startTunnel({
-        peer: { chatId: 500, chatType: 'PRIVATE' },
         password: 'secret',
         socksPort,
-        serverLabel: 'server',
       });
 
       const resp = await socks5Get(socksPort, '127.0.0.1', backend.port);
