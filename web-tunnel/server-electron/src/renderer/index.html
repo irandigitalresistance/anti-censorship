@@ -410,9 +410,10 @@
       function renderClients(users, connections, clients, clientAccount) {
         const list = $('connections-list');
         const empty = $('connections-empty');
+        users = users || [];
         connections = connections || [];
         clients = clients || [];
-        if (clients.length === 0) {
+        if (clients.length === 0 && users.length === 0 && connections.length === 0) {
           list.innerHTML = '';
           empty.style.display = 'block';
           return;
@@ -426,6 +427,15 @@
           }
           return a.createdAt - b.createdAt;
         });
+        const sharedClientPeerKey = clientAccount && clientAccount.me ? ('PRIVATE:' + clientAccount.me.id) : null;
+        const legacyUsers = users
+          .filter((user) => user.peerKey !== sharedClientPeerKey)
+          .sort((a, b) => {
+            if ((b.activeConnections > 0) !== (a.activeConnections > 0)) {
+              return (b.activeConnections > 0 ? 1 : 0) - (a.activeConnections > 0 ? 1 : 0);
+            }
+            return a.firstSeen - b.firstSeen;
+          });
         const managedHtml = managed.map((client) => {
           const conns = (client.activeTunnelIds || []).map((id) => connById.get(id)).filter(Boolean);
           const state = client.activeConnections > 0
@@ -449,7 +459,32 @@
             '</div>'
           );
         }).join('');
-        list.innerHTML = managedHtml;
+        const legacyHtml = legacyUsers.map((user) => {
+          const conns = (user.activeTunnelIds || []).map((id) => connById.get(id)).filter(Boolean);
+          const total = (user.bytesUp || 0) + (user.bytesDown || 0);
+          const state = user.activeConnections === 0
+            ? 'idle for ' + fmtDuration(Date.now() - user.lastSeen)
+            : conns.length + (conns.length === 1 ? ' active connection' : ' active connections');
+          return (
+            '<div class="account-group">' +
+              '<div class="account-header">' +
+                '<div>' +
+                  '<div class="account-name">' + esc(userLabelFor(user)) + '</div>' +
+                  '<div class="account-badge">legacy Bale-account client - ' + esc(userBadgeFor(user)) + ' - ' + esc(state) + '</div>' +
+                '</div>' +
+                '<div class="account-metrics">' +
+                  '<div class="metric"><span class="val">up ' + fmtBytes(user.bytesUp) + '</span><span class="lbl">Up</span></div>' +
+                  '<div class="metric"><span class="val">down ' + fmtBytes(user.bytesDown) + '</span><span class="lbl">Down</span></div>' +
+                  '<div class="metric"><span class="val">total ' + fmtBytes(total) + '</span><span class="lbl">Total</span></div>' +
+                  '<button class="link reset-user-btn" data-peer-key="' + esc(user.peerKey) + '" style="margin-left:8px; align-self:center;">Reset</button>' +
+                '</div>' +
+              '</div>' +
+              renderConnectionItems(conns) +
+            '</div>'
+          );
+        }).join('');
+        list.innerHTML = managedHtml +
+          (legacyHtml ? '<div class="section-title">Legacy Bale-account clients</div>' + legacyHtml : '');
       }
 
       function renderLogs(logs) {

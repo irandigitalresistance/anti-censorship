@@ -19,12 +19,18 @@ class TunnelForegroundService : Service() {
         private const val CHANNEL_ID = "wt_tunnel_fg"
         private const val NOTIF_ID = 1002
         private const val EXTRA_LABEL = "label"
+        private const val EXTRA_STATE = "state"
         private const val WAKELOCK_TAG = "WebTunnel::ForegroundWakeLock"
 
-        fun start(context: Context, label: String) {
+        fun start(context: Context, label: String, state: String = "active") {
             val intent = Intent(context, TunnelForegroundService::class.java)
                 .putExtra(EXTRA_LABEL, label)
+                .putExtra(EXTRA_STATE, state)
             ContextCompat.startForegroundService(context, intent)
+        }
+
+        fun reconnecting(context: Context, label: String) {
+            start(context, label, state = "reconnecting")
         }
 
         fun stop(context: Context) {
@@ -34,13 +40,15 @@ class TunnelForegroundService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var currentLabel: String = "Web Tunnel"
+    private var currentState: String = "active"
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         currentLabel = intent?.getStringExtra(EXTRA_LABEL) ?: currentLabel
+        currentState = intent?.getStringExtra(EXTRA_STATE) ?: currentState
         ensureChannel()
-        val notif = buildNotification(currentLabel)
+        val notif = buildNotification(currentLabel, currentState)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -59,7 +67,7 @@ class TunnelForegroundService : Service() {
         // the OS keeps the main process alive while the VPN is still active.
         super.onTaskRemoved(rootIntent)
         ensureChannel()
-        val notif = buildNotification(currentLabel)
+        val notif = buildNotification(currentLabel, currentState)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -98,7 +106,7 @@ class TunnelForegroundService : Service() {
         }
     }
 
-    private fun buildNotification(label: String): Notification {
+    private fun buildNotification(label: String, state: String): Notification {
         val openIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
@@ -106,7 +114,7 @@ class TunnelForegroundService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("Web Tunnel active")
+            .setContentTitle(if (state == "reconnecting") "Web Tunnel reconnecting" else "Web Tunnel active")
             .setContentText(label)
             .setContentIntent(openIntent)
             .setOngoing(true)

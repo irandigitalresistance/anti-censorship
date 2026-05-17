@@ -848,7 +848,8 @@ export class ServerController extends EventEmitter {
       ? metadata.webTunnelClientId.trim()
       : '';
     if (!clientId) {
-      throw new Error('CONFIG_REQUIRED: import a managed client config first');
+      this.manager?.updateTunnel(tunnelId, { clientKind: 'legacy' });
+      return;
     }
     const profile = this.clientProfiles.find((client) => client.id === clientId);
     if (!profile) throw new Error('CONFIG_UNKNOWN_CLIENT: this client config is not registered on the server');

@@ -42,7 +42,7 @@ private const val WT2_PUB_BYTES = 32
 private const val WT2_SIG_BYTES = 64
 private const val WT2_DEFAULT_COMPRESSION_THRESHOLD = 512
 private const val WT2_DEFAULT_MIN_COMPRESSION_SAVINGS = 48
-private const val WT2_MAX_CHUNK_PAYLOAD = 2_000
+private const val WT2_MAX_CHUNK_PAYLOAD = 12_000
 
 private val RANDOM_V2 = SecureRandom()
 
@@ -265,7 +265,7 @@ class TunnelMuxV2(
   private val cipher: SessionCipher,
   private val role: String,
   private val pingIntervalMs: Long = 5_000L,
-  private val maxMissedPongs: Int = 3,
+  private val maxMissedPongs: Int = 6,
   private val disableHeartbeat: Boolean = false,
 ) : StreamMux, UdpStreamMux {
   private val streams = linkedMapOf<Int, StreamV2Impl>()
@@ -280,13 +280,15 @@ class TunnelMuxV2(
   private val pendingPings = linkedMapOf<Long, CompletableDeferred<Unit>>()
 
   // Heartbeat: both sides ping every pingIntervalMs; whichever side sees
-  // maxMissedPongs consecutive misses tears down the mux. Detects LiveKit
-  // data-channel staleness (the ~20s Android disconnect) before it becomes
-  // user-visible.
+  // maxMissedPongs intervals with no valid peer packets tears down the mux.
+  // Any packet counts as liveness because pong packets can queue behind heavy
+  // reliable data-channel traffic.
   private val heartbeatScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private var heartbeatJob: Job? = null
-  @Volatile private var lastPongAt: Long = 0L
-  @Volatile private var missedPongs: Int = 0
+  @Volatile private var lastPeerActivityAt: Long = 0L
+  @Volatile private var missedHeartbeats: Int = 0
+  @Volatile private var badPeerPackets: Int = 0
+  private val maxBadPeerPackets: Int = 8
 
   init {
     transport.onMessage { wire -> handleWire(wire) }
@@ -297,27 +299,27 @@ class TunnelMuxV2(
   }
 
   private fun startHeartbeat() {
-    lastPongAt = System.currentTimeMillis()
-    missedPongs = 0
+    lastPeerActivityAt = System.currentTimeMillis()
+    missedHeartbeats = 0
     heartbeatJob = heartbeatScope.launch {
       while (!closed.get()) {
         delay(pingIntervalMs)
         if (closed.get()) break
-        val sincePong = System.currentTimeMillis() - lastPongAt
-        if (sincePong > pingIntervalMs) {
-          missedPongs += 1
+        val sinceActivity = System.currentTimeMillis() - lastPeerActivityAt
+        if (sinceActivity > pingIntervalMs) {
+          missedHeartbeats += 1
         }
-        if (missedPongs >= maxMissedPongs) {
-          val reason = "keepalive timeout — $missedPongs missed pongs (${sincePong / 1000}s silent)"
+        if (missedHeartbeats >= maxMissedPongs) {
+          val reason = "keepalive timeout - $missedHeartbeats missed heartbeats (${sinceActivity / 1000}s without peer traffic)"
           shutdown(reason)
           try { transport.close(reason) } catch (_: Throwable) {}
           break
         }
         try {
           val ping = JSONObject().put("kind", "ping").put("ts", System.currentTimeMillis())
-          sendPacket(WT2_TYPE_CONTROL, 0, ping.toString().toByteArray(Charsets.UTF_8), WT2_FLAG_RELIABLE)
+          sendHeartbeatControl(ping)
         } catch (_: Throwable) {
-          missedPongs += 1
+          missedHeartbeats += 1
         }
       }
     }
@@ -446,11 +448,33 @@ class TunnelMuxV2(
     )
   }
 
-  private fun sendPacket(typeCode: Int, channelId: Int, payload: ByteArray, flags: Int = 0) {
+  private fun sendHeartbeatControl(json: JSONObject) {
+    sendPacket(
+      typeCode = WT2_TYPE_CONTROL,
+      channelId = 0,
+      payload = json.toString().toByteArray(Charsets.UTF_8),
+      flags = WT2_FLAG_RELIABLE,
+      preferUnreliable = true,
+    )
+  }
+
+  private fun sendPacket(
+    typeCode: Int,
+    channelId: Int,
+    payload: ByteArray,
+    flags: Int = 0,
+    preferUnreliable: Boolean = false,
+  ) {
     if (closed.get()) return
     val plain = encodeV2Packet(typeCode, channelId, payload, flags)
     val encrypted = cipher.encrypt(plain)
-    transport.send(encrypted)
+    if (preferUnreliable) {
+      transport.sendUnreliable(encrypted)
+    } else if (typeCode == WT2_TYPE_CONTROL) {
+      transport.sendPriority(encrypted)
+    } else {
+      transport.send(encrypted)
+    }
   }
 
   private fun handleWire(wire: ByteArray) {
@@ -458,17 +482,26 @@ class TunnelMuxV2(
     val plain = try {
       cipher.decrypt(wire)
     } catch (_: Throwable) {
-      shutdown("decryption failed: possible network corruption or key mismatch")
-      try { transport.close("decryption failed") } catch (_: Throwable) {}
+      val reason = recordBadPeerPacket("decryption failed: possible network corruption or key mismatch")
+      if (reason != null) {
+        shutdown(reason)
+        try { transport.close(reason) } catch (_: Throwable) {}
+      }
       return
     }
     val packet = try {
       decodeV2Packet(plain)
     } catch (_: Throwable) {
-      shutdown("received malformed data from peer")
-      try { transport.close("received malformed data from peer") } catch (_: Throwable) {}
+      val reason = recordBadPeerPacket("received malformed data from peer")
+      if (reason != null) {
+        shutdown(reason)
+        try { transport.close(reason) } catch (_: Throwable) {}
+      }
       return
     }
+    badPeerPackets = 0
+    lastPeerActivityAt = System.currentTimeMillis()
+    missedHeartbeats = 0
     when (packet.typeCode) {
       WT2_TYPE_CONTROL -> handleControl(packet.payload)
       WT2_TYPE_TCP -> synchronized(streams) {
@@ -542,17 +575,10 @@ class TunnelMuxV2(
       "ping" -> {
         val ts = msg.optLong("ts", System.currentTimeMillis())
         val pong = JSONObject().put("kind", "pong").put("ts", ts)
-        sendPacket(
-          WT2_TYPE_CONTROL,
-          0,
-          pong.toString().toByteArray(Charsets.UTF_8),
-          WT2_FLAG_RELIABLE,
-        )
+        sendHeartbeatControl(pong)
       }
 
       "pong" -> {
-        lastPongAt = System.currentTimeMillis()
-        missedPongs = 0
         val ts = msg.optLong("ts", -1L)
         if (ts >= 0L) {
           synchronized(pendingPings) { pendingPings[ts]?.complete(Unit) }
@@ -560,6 +586,15 @@ class TunnelMuxV2(
       }
 
       else -> Unit
+    }
+  }
+
+  private fun recordBadPeerPacket(baseReason: String): String? {
+    badPeerPackets += 1
+    return if (badPeerPackets >= maxBadPeerPackets) {
+      "$baseReason ($badPeerPackets consecutive bad packets)"
+    } else {
+      null
     }
   }
 

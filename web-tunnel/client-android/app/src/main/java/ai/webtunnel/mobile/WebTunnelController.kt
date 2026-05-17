@@ -6,11 +6,14 @@ import android.util.Log
 import io.livekit.android.room.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -119,12 +122,14 @@ private data class TunnelRuntime(
   val transport: LiveKitTransport,
   val mux: TunnelMuxV2,
   val socksServer: Socks5Server,
+  val meetRepeatsJob: Job?,
   val metricsJob: Job?,
   val closeJob: Job?,
 )
 
 private const val MAGIC_MEET_OFFER = "__WT_MEET__"
 private const val V2_HANDSHAKE_TIMEOUT_MS = 12_000L
+private const val CONNECTING_EVENT_LIMIT = 80
 
 class WebTunnelController(
   private val context: Context,
@@ -153,6 +158,7 @@ class WebTunnelController(
   private var reconnectJob: Job? = null
   /** True while the current `startTunnel` call was initiated from the reconnect loop. */
   @Volatile private var insideReconnect = false
+  private val startMutex = Mutex()
 
   var onStateChanged: ((ControllerState) -> Unit)? = null
 
@@ -320,8 +326,15 @@ class WebTunnelController(
     return snapshot()
   }
 
-  @Suppress("UNUSED_PARAMETER")
   suspend fun startTunnel(
+    selected: ChatOption,
+    socksPort: Int,
+  ): ControllerState = startMutex.withLock {
+    startTunnelLocked(selected, socksPort)
+  }
+
+  @Suppress("UNUSED_PARAMETER")
+  private suspend fun startTunnelLocked(
     selected: ChatOption,
     socksPort: Int,
   ): ControllerState {
@@ -342,9 +355,26 @@ class WebTunnelController(
       return snapshot()
     }
     if (runtime != null) {
-      state = state.copy(lastError = "tunnel already running")
-      emit()
-      return snapshot()
+      if (insideReconnect) {
+        if (state.tunnel != null) {
+          logLine("reconnect skipped; tunnel already active")
+          state = state.copy(
+            connectingEvents = null,
+            busy = false,
+            lastError = null,
+            retryState = "idle",
+            retryAttempt = 0,
+          )
+          emit()
+          return snapshot()
+        }
+        logLine("reconnect replacing stale runtime")
+        tearDownRuntime("reconnect replacing stale runtime")
+      } else {
+        state = state.copy(lastError = "tunnel already running")
+        emit()
+        return snapshot()
+      }
     }
 
     lastStartParams = StartParams(effectiveSelected, socksPort)
@@ -354,7 +384,8 @@ class WebTunnelController(
       reconnectJob = null
     }
     state = state.copy(
-      connectingEvents = emptyList(),
+      tunnel = null,
+      connectingEvents = if (insideReconnect) (state.connectingEvents ?: emptyList()) else emptyList(),
       busy = true,
       lastError = null,
       retryState = if (insideReconnect) state.retryState else "idle",
@@ -365,13 +396,14 @@ class WebTunnelController(
 
     var room: io.livekit.android.room.Room? = null
     var transport: LiveKitTransport? = null
-    var mux: TunnelMuxV2? = null
     var socks: Socks5Server? = null
+    var meetRepeatsJob: Job? = null
     var callId: Long? = null
     var startupMuxClosedReason: String? = null
     var tunnelMarkedReady = false
 
     try {
+      ensureStartNotCancelled()
       val peer = BalePeer(
         type = if (effectiveSelected.chatType == "PRIVATE") BalePeerType.PRIVATE else BalePeerType.GROUP,
         id = effectiveSelected.chatId,
@@ -382,11 +414,16 @@ class WebTunnelController(
       callId = call.callId
       logLine("Meet.StartCall OK callId=${call.callId} room=${call.roomUuid}")
       sendMeetOffer(peer, call.callId)
-      scheduleMeetOfferRepeats(peer, call.callId)
+      meetRepeatsJob = scheduleMeetOfferRepeats(peer, call.callId)
+      ensureStartNotCancelled()
       pushConnectingEvent("Connecting to LiveKit room...")
       room = connectLiveKitRoom(appContext, baleClient.liveKitUrlFor(call))
       logLine("LiveKit connect OK local=${room.localParticipant.identity?.value ?: "unknown"}")
-      val peerIdentity = awaitRemoteParticipant(room)
+      ensureStartNotCancelled()
+      val peerIdentity = awaitRemoteParticipant(
+        room,
+        timeoutMs = if (insideReconnect) 8_000 else 15_000,
+      )
       if (peerIdentity != null) logLine("LiveKit peer connected identity=$peerIdentity")
       else logLine("LiveKit peer not visible yet; continuing without identity lock")
       transport = LiveKitTransport(room = room, scope = scope, peerIdentity = peerIdentity)
@@ -406,28 +443,38 @@ class WebTunnelController(
       } catch (_: TimeoutCancellationException) {
         throw IllegalStateException("server did not respond in time — check that the server is running")
       }
+      meetRepeatsJob.cancel()
+      meetRepeatsJob = null
+      ensureStartNotCancelled()
       assertServerIdentityTrusted(keyId, run.serverFingerprint)
       pushConnectingEvent("Handshake complete. Starting SOCKS5...")
-      mux = run.mux
+      val mux = run.mux
       mux.onClose { reason ->
         if (!tunnelMarkedReady && startupMuxClosedReason == null) {
           startupMuxClosedReason = reason
         }
         logLine("tunnel closed: $reason")
         if (reason == "user stop") return@onClose
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
           val wasReady = tunnelMarkedReady
-          if (runtime?.callId == call.callId) {
-            tearDownRuntime("tunnel dropped")
+          if (runtime?.callId != call.callId) {
+            logLine("ignoring close for stale call ${call.callId}: $reason")
+            return@launch
           }
-          state = state.copy(lastError = "tunnel closed: $reason")
+          tearDownRuntime("tunnel dropped")
+          state = state.copy(
+            tunnel = null,
+            busy = false,
+            lastError = "tunnel closed: $reason",
+          )
           emit()
-          // If the tunnel had been fully up before this drop and the user
-          // hasn't cancelled, kick off a reconnect loop.
-          if (wasReady && !userCancelled && lastStartParams != null) {
+          // Recover until the user explicitly stops. Early drops after a
+          // successful handshake are still recoverable and should not leave the
+          // UI showing a stale active tunnel.
+          if (!userCancelled && lastStartParams != null && isRecoverableTunnelFailure(reason)) {
             scheduleReconnect(reason)
           } else if (!wasReady) {
-            stopTunnel()
+            stopLocalVpnServices()
           }
         }
       }
@@ -458,12 +505,21 @@ class WebTunnelController(
           logLine("SOCKS error: ${error.message}")
           val message = error.message.orEmpty()
           if (message.contains("mux closed", ignoreCase = true)) {
-            scope.launch {
-              if (runtime?.callId == call.callId) {
-                stopTunnel()
+            scope.launch(Dispatchers.IO) {
+              if (runtime?.callId != call.callId) {
+                logLine("ignoring SOCKS mux close for stale call ${call.callId}: $message")
+                return@launch
               }
-              state = state.copy(lastError = "tunnel closed: mux closed")
+              tearDownRuntime("mux closed")
+              state = state.copy(
+                tunnel = null,
+                busy = false,
+                lastError = "tunnel closed: mux closed",
+              )
               emit()
+              if (!userCancelled && lastStartParams != null) {
+                scheduleReconnect("mux closed")
+              }
             }
           }
         },
@@ -473,6 +529,7 @@ class WebTunnelController(
       if (startupMuxClosedReason != null) {
         throw IllegalStateException("MUX_CLOSED_DURING_START:$startupMuxClosedReason")
       }
+      ensureStartNotCancelled()
       tunnelMarkedReady = true
       val metricsJob = scope.launch {
         while (true) {
@@ -486,6 +543,7 @@ class WebTunnelController(
         transport = transport,
         mux = mux,
         socksServer = socks,
+        meetRepeatsJob = meetRepeatsJob,
         metricsJob = metricsJob,
         closeJob = null,
       )
@@ -502,25 +560,29 @@ class WebTunnelController(
         )
       } catch (_: Throwable) { /* best effort */ }
       val initialMetrics = counters.snapshot()
+      val tunnelStatus = TunnelStatus(
+        serverLabel = effectiveSelected.label,
+        socksPort = boundPort,
+        startedAt = System.currentTimeMillis(),
+        bytesUp = initialMetrics.bytesUp,
+        bytesDown = initialMetrics.bytesDown,
+        streamsOpened = initialMetrics.streamsOpened,
+        streamsActive = initialMetrics.streamsActive,
+      )
+      startLocalVpnServices(tunnelStatus)
       state = state.copy(
         connectingEvents = null,
-        tunnel = TunnelStatus(
-          serverLabel = effectiveSelected.label,
-          socksPort = boundPort,
-          startedAt = System.currentTimeMillis(),
-          bytesUp = initialMetrics.bytesUp,
-          bytesDown = initialMetrics.bytesDown,
-          streamsOpened = initialMetrics.streamsOpened,
-          streamsActive = initialMetrics.streamsActive,
-        ),
+        tunnel = tunnelStatus,
         lastError = null,
       )
       emit()
       return snapshot()
     } catch (error: Throwable) {
       logLine("startTunnel failed: ${error.message}")
+      val cancelledByUser = userCancelled || error is CancellationException
       val detail = error.message ?: "unknown"
       val display = when {
+        cancelledByUser -> null
         detail.contains("CONFIG_ALREADY_CONNECTED") ->
           "This client config is already connected on another device"
         detail.contains("CONFIG_REQUIRED") ->
@@ -532,7 +594,34 @@ class WebTunnelController(
           "Server identity changed — use Reset pins to reconnect to a reinstalled server"
         else -> detail
       }
-      state = state.copy(connectingEvents = null, lastError = "start tunnel failed: $display")
+      val recoverable = !cancelledByUser && isRecoverableTunnelFailure(detail)
+      state = if (cancelledByUser) {
+        state.copy(
+          tunnel = null,
+          connectingEvents = null,
+          lastError = null,
+          retryState = "idle",
+          retryAttempt = 0,
+        )
+      } else if (insideReconnect) {
+        state.copy(
+          tunnel = null,
+          connectingEvents = appendConnectingEvent("Reconnect failed: ${display ?: detail}"),
+          lastError = "reconnect failed: ${display ?: detail}",
+          retryState = "reconnecting",
+        )
+      } else {
+        state.copy(
+          tunnel = null,
+          connectingEvents = if (recoverable) appendConnectingEvent("Start failed; retrying: ${display ?: detail}") else null,
+          lastError = "start tunnel failed: ${display ?: detail}",
+        )
+      }
+      try {
+        meetRepeatsJob?.cancel()
+      } catch (_: Throwable) {
+        Unit
+      }
       try {
         socks?.stop()
       } catch (_: Throwable) {
@@ -549,11 +638,14 @@ class WebTunnelController(
         Unit
       }
       try {
-        if (callId != null) baleClient.discardCall(callId)
+        if (callId != null) discardCallAsync(callId)
       } catch (_: Throwable) {
         Unit
       }
       emit()
+      if (!insideReconnect && recoverable && !userCancelled && lastStartParams != null) {
+        scheduleReconnect(display ?: detail)
+      }
       return snapshot()
     } finally {
       setBusy(false)
@@ -564,13 +656,15 @@ class WebTunnelController(
     userCancelled = true
     reconnectJob?.cancel()
     reconnectJob = null
+    lastStartParams = null
     tearDownRuntime("user stop")
-    TunnelVpnBridge.stop(appContext)
-    TunnelForegroundService.stop(appContext)
+    stopLocalVpnServices()
     try { sessionStore.clearLastTunnelTarget() } catch (_: Throwable) {}
     state = state.copy(
       tunnel = null,
       connectingEvents = null,
+      busy = false,
+      lastError = null,
       retryState = "idle",
       retryAttempt = 0,
     )
@@ -596,33 +690,62 @@ class WebTunnelController(
     runtime = null
     if (current != null) {
       try { current.socksServer.stop() } catch (_: Throwable) {}
+      try { current.meetRepeatsJob?.cancel() } catch (_: Throwable) {}
       try { current.metricsJob?.cancel() } catch (_: Throwable) {}
       try { current.mux.close(reason) } catch (_: Throwable) {}
       try { current.transport.close(reason) } catch (_: Throwable) {}
       try { current.room.disconnect() } catch (_: Throwable) {}
-      try { baleClient.discardCall(current.callId) } catch (_: Throwable) {}
+      discardCallAsync(current.callId)
       try { current.closeJob?.cancel() } catch (_: Throwable) {}
     }
   }
 
+  private fun discardCallAsync(callId: Long) {
+    scope.launch(Dispatchers.IO) {
+      try { baleClient.discardCall(callId) } catch (_: Throwable) {}
+    }
+  }
+
+  @Synchronized
   private fun scheduleReconnect(reason: String) {
     val params = lastStartParams ?: return
     if (userCancelled) return
-    reconnectJob?.cancel()
-    reconnectJob = scope.launch {
+    if (runtime != null && state.tunnel != null) {
+      logLine("skip reconnect after $reason; tunnel already active")
+      return
+    }
+    if (reconnectJob?.isActive == true) {
+      logLine("reconnect already running; latest reason=$reason")
+      return
+    }
+    val job = scope.launch(Dispatchers.IO) {
       var attempt = 0
+      try { TunnelForegroundService.reconnecting(appContext, params.selected.label) } catch (e: Throwable) {
+        logLine("foreground reconnect notification failed: ${e.message}")
+      }
       state = state.copy(
         tunnel = null,
+        busy = false,
         connectingEvents = listOf("Tunnel dropped ($reason); reconnecting…"),
         retryState = "reconnecting",
         retryAttempt = 0,
       )
       emit()
       while (!userCancelled) {
+        if (runtime != null && state.tunnel != null) {
+          state = state.copy(connectingEvents = null, retryState = "idle", retryAttempt = 0)
+          emit()
+          return@launch
+        }
         attempt += 1
-        val backoff = minOf(30_000L, 1000L * (1L shl minOf(attempt - 1, 5)))
+        val backoff = when (attempt) {
+          1 -> 250L
+          2 -> 1_000L
+          else -> minOf(8_000L, 1_000L * (1L shl minOf(attempt - 2, 3)))
+        }
         val jitter = (Math.random() * 500).toLong()
         val delayMs = backoff + jitter
+        logLine("reconnect attempt $attempt scheduled in ${delayMs}ms after $reason")
         state = state.copy(
           retryState = "reconnecting",
           retryAttempt = attempt,
@@ -631,7 +754,13 @@ class WebTunnelController(
         emit()
         try { delay(delayMs) } catch (_: Throwable) { return@launch }
         if (userCancelled) return@launch
+        if (runtime != null && state.tunnel != null) {
+          state = state.copy(connectingEvents = null, retryState = "idle", retryAttempt = 0)
+          emit()
+          return@launch
+        }
         try {
+          logLine("reconnecting attempt $attempt")
           state = state.copy(
             connectingEvents = (state.connectingEvents ?: emptyList()) + "Reconnecting (attempt $attempt)…",
           )
@@ -656,6 +785,53 @@ class WebTunnelController(
       state = state.copy(retryState = "idle", retryAttempt = 0)
       emit()
     }
+    reconnectJob = job
+    job.invokeOnCompletion {
+      synchronized(this@WebTunnelController) {
+        if (reconnectJob === job) reconnectJob = null
+      }
+    }
+  }
+
+  private fun appendConnectingEvent(message: String): List<String> {
+    val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+    return ((state.connectingEvents ?: emptyList()) + "[$ts] $message")
+      .takeLast(CONNECTING_EVENT_LIMIT)
+  }
+
+  private fun ensureStartNotCancelled() {
+    if (userCancelled) throw CancellationException("user stop")
+  }
+
+  private fun isRecoverableTunnelFailure(message: String): Boolean {
+    val permanent = listOf(
+      "SERVER_KEY_MISMATCH",
+      "CONFIG_UNKNOWN_CLIENT",
+      "CONFIG_REQUIRED",
+      "not authenticated",
+      "import a client config",
+    )
+    return permanent.none { message.contains(it, ignoreCase = true) }
+  }
+
+  private fun startLocalVpnServices(tunnel: TunnelStatus) {
+    TunnelVpnBridge.start(
+      appContext,
+      TunnelVpnConfig(
+        sessionLabel = "Web Tunnel ${tunnel.serverLabel}",
+        socksPort = tunnel.socksPort,
+      ),
+    )
+    try {
+      TunnelForegroundService.start(appContext, tunnel.serverLabel)
+    } catch (e: Throwable) {
+      logLine("foreground tunnel notification failed: ${e.message}")
+    }
+  }
+
+  private fun stopLocalVpnServices() {
+    try { TunnelVpnBridge.stop(appContext) } catch (_: Throwable) {}
+    try { TunnelForegroundService.stop(appContext) } catch (_: Throwable) {}
   }
 
   fun logsText(): String =
@@ -757,9 +933,7 @@ class WebTunnelController(
   }
 
   private fun pushConnectingEvent(msg: String) {
-    val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-    val events = (state.connectingEvents ?: emptyList()) + "[$ts] $msg"
-    state = state.copy(connectingEvents = events)
+    state = state.copy(connectingEvents = appendConnectingEvent(msg))
     emit()
     logLine("connecting: $msg")
   }
@@ -870,11 +1044,11 @@ class WebTunnelController(
     }
   }
 
-  private fun scheduleMeetOfferRepeats(peer: BalePeer, callId: Long) {
+  private fun scheduleMeetOfferRepeats(peer: BalePeer, callId: Long): Job {
     val payload = buildMeetOffer(callId)
     val attempts = 5
     val delayMs = 750L
-    scope.launch(Dispatchers.IO) {
+    return scope.launch(Dispatchers.IO) {
       repeat(attempts) {
         delay(delayMs)
         try {

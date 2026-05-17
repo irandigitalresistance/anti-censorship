@@ -40,6 +40,12 @@ export interface LivekitTransportOptions {
   reliable?: boolean;
 }
 
+type QueuedPacket = {
+  bytes: Uint8Array;
+  reliable: boolean;
+  resolve: () => void;
+};
+
 export function makeLivekitTransport(opts: LivekitTransportOptions): Transport {
   const { room } = opts;
   const reliable = opts.reliable ?? true;
@@ -47,6 +53,51 @@ export function makeLivekitTransport(opts: LivekitTransportOptions): Transport {
   let onMessage: ((bytes: Uint8Array) => void) | null = null;
   let onClose: ((reason: string) => void) | null = null;
   let closed = false;
+  let draining = false;
+  const highPriorityQueue: QueuedPacket[] = [];
+  const normalQueue: QueuedPacket[] = [];
+
+  const resolveQueued = () => {
+    for (const item of highPriorityQueue.splice(0)) item.resolve();
+    for (const item of normalQueue.splice(0)) item.resolve();
+  };
+
+  const drain = async () => {
+    if (draining) return;
+    draining = true;
+    try {
+      while (!closed) {
+        const item = highPriorityQueue.shift() ?? normalQueue.shift();
+        if (!item) return;
+        try {
+          await room.publishData(item.bytes, peerIdentity
+            ? { reliable: item.reliable, destinationIdentities: [peerIdentity] }
+            : { reliable: item.reliable });
+          item.resolve();
+        } catch (e) {
+          item.resolve();
+          if (closed) return;
+          closed = true;
+          resolveQueued();
+          onClose?.(`publishData failed: ${(e as Error).message}`);
+          return;
+        }
+      }
+      resolveQueued();
+    } finally {
+      draining = false;
+    }
+  };
+
+  const enqueue = (bytes: Uint8Array, priority: 'high' | 'normal', packetReliable = reliable) => {
+    if (closed) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const item: QueuedPacket = { bytes: bytes.slice(), reliable: packetReliable, resolve };
+      if (priority === 'high') highPriorityQueue.push(item);
+      else normalQueue.push(item);
+      void drain();
+    });
+  };
 
   const offData = room.onDataReceived((bytes, fromIdentity) => {
     if (closed) return;
@@ -57,21 +108,19 @@ export function makeLivekitTransport(opts: LivekitTransportOptions): Transport {
   const offDisc = room.onDisconnect((reason) => {
     if (closed) return;
     closed = true;
+    resolveQueued();
     onClose?.(reason);
   });
 
   return {
-    async send(bytes) {
-      if (closed) return;
-      try {
-        await room.publishData(bytes, peerIdentity
-          ? { reliable, destinationIdentities: [peerIdentity] }
-          : { reliable });
-      } catch (e) {
-        if (closed) return;
-        closed = true;
-        onClose?.(`publishData failed: ${(e as Error).message}`);
-      }
+    send(bytes) {
+      return enqueue(bytes, 'normal');
+    },
+    sendPriority(bytes) {
+      return enqueue(bytes, 'high');
+    },
+    sendUnreliable(bytes) {
+      return enqueue(bytes, 'high', false);
     },
     onMessage(cb) {
       onMessage = cb;
@@ -85,6 +134,7 @@ export function makeLivekitTransport(opts: LivekitTransportOptions): Transport {
       closed = true;
       offData();
       offDisc();
+      resolveQueued();
       void room.disconnect(reason);
       onClose?.(reason);
     },

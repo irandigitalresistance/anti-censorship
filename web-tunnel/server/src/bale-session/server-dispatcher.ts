@@ -28,8 +28,8 @@ interface PerPeerTunnel {
   seenFrames: Set<string>;
 }
 
-/** Maps meetKey(callId) -> tunnelId for active meet calls so we can update peer after late meet-offer arrives */
-type MeetTunnelEntry = { tunnelId: string; effectivePeer: Peer | null };
+/** Maps meetKey(callId) -> tunnel metadata so we can update peer after late meet-offer arrives */
+type MeetTunnelEntry = { tunnelId: string; effectivePeer: Peer | null; displayPeer: Peer };
 
 export interface BaleServerDispatcherOptions {
   logger?: (line: string) => void;
@@ -78,11 +78,13 @@ export class BaleServerDispatcher {
    * to LiveKit and then never sends a hello.
    */
   private static readonly HANDSHAKE_HARD_TIMEOUT_MS = 15_000;
+  private static readonly RECENT_MEET_CALL_TTL_MS = 120_000;
   private readonly tunnels = new Map<string, PerPeerTunnel>();
   private readonly activeMeetCalls = new Set<string>();
   private readonly activeMeetTunnels = new Map<string, MeetTunnelEntry>();
   private readonly pendingMeetOffers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly meetOfferPeers = new Map<string, Peer>();
+  private readonly recentlyFinishedMeetCalls = new Map<string, number>();
   private offMessage: (() => void) | null = null;
   private offIncomingCall: (() => void) | null = null;
   private startedAtMs: number | null = null;
@@ -152,7 +154,6 @@ export class BaleServerDispatcher {
     });
     this.offIncomingCall = this.opts.incomingCallSource?.onIncomingCall((event) => {
       const offeredPeer = this.meetOfferPeers.get(this.meetKey(event.callId)) ?? null;
-      this.clearPendingMeetOffer(event.callId);
       this.log(
         `incoming-call push: callId=${event.callId} room=${event.roomUuid || '-'} ` +
         `base=${event.baseUrl || '-'} date=${event.dateMs ?? 'n/a'}`,
@@ -179,6 +180,7 @@ export class BaleServerDispatcher {
     for (const timer of this.pendingMeetOffers.values()) clearTimeout(timer);
     this.pendingMeetOffers.clear();
     this.meetOfferPeers.clear();
+    this.recentlyFinishedMeetCalls.clear();
     for (const [key, pt] of this.tunnels) {
       if (!pt.closed) {
         pt.closed = true;
@@ -279,11 +281,16 @@ export class BaleServerDispatcher {
    *
    * `peer` is optional because the real Bale incoming-call push does not carry
    * the caller's chat identity in the subset we currently parse. In that path
-   * we derive the peer from `AcceptCall`'s echoed `StartCallResult.peer`.
+   * we use `AcceptCall`'s echoed peer only as a temporary dashboard label and
+   * let the later `__WT_MEET__` chat offer correct it.
    */
   private async spawnMeetTunnel(peer: Peer | null, callId: bigint): Promise<void> {
     const key = this.meetKey(callId);
     this.clearPendingMeetOffer(callId);
+    if (this.isRecentlyFinishedMeetCall(callId)) {
+      this.log(`ignored recently finished meet callId=${callId}`);
+      return;
+    }
     if (this.activeMeetCalls.has(key)) {
       this.log(`duplicate meet-offer for callId=${callId}; ignoring`);
       return;
@@ -306,10 +313,15 @@ export class BaleServerDispatcher {
     try {
       result = await this.acceptMeetCallWithRetry(callId);
     } catch (e) {
-      this.activeMeetCalls.delete(key);
+      this.finishMeetCall(callId);
       this.log(`acceptCall failed for ${callId}: ${(e as Error).message}`);
       return;
     }
+
+    // Use the caller peer from the meet-offer chat message when available.
+    // peerFromCallResult() may return the server's own peer (callee) on some Bale versions,
+    // so we prefer the peer from the __WT_MEET__ chat message which is always the sender.
+    const displayPeer = peer ?? this.peerFromCallResult(result);
 
     let room;
     try {
@@ -320,27 +332,23 @@ export class BaleServerDispatcher {
         peerIdentity: 'client',
       });
     } catch (e) {
-      this.activeMeetCalls.delete(key);
+      this.finishMeetCall(callId);
       this.log(`livekit connect failed for ${callId}: ${(e as Error).message}`);
       // Best-effort: hang up the call so the caller isn't left waiting.
       try { await this.opts.baleClient.discardCall(callId); } catch { /* ignore */ }
       return;
     }
 
-    // Use the caller peer from the meet-offer chat message when available.
-    // peerFromCallResult() may return the server's own peer (callee) on some Bale versions,
-    // so we prefer the peer from the __WT_MEET__ chat message which is always the sender.
-    const effectivePeer = peer ?? this.peerFromCallResult(result);
     const transport = makeLivekitTransport({ room });
-    const label = `webrtc:${this.keyFor(effectivePeer)}`;
+    const label = `webrtc:${this.keyFor(displayPeer)}`;
     const { handle, close: closeMgr } = this.manager.openTunnel(label, {
       carrier: 'webrtc',
-      peer: toTunnelPeer(effectivePeer),
+      peer: toTunnelPeer(displayPeer),
       protocolVersion: this.protocolVersion(),
     });
 
     // Track this tunnel so a late meet-offer can update the peer identity.
-    const meetEntry: MeetTunnelEntry = { tunnelId: handle.id, effectivePeer: peer };
+    const meetEntry: MeetTunnelEntry = { tunnelId: handle.id, effectivePeer: peer, displayPeer };
     this.activeMeetTunnels.set(key, meetEntry);
 
     const client = this.opts.baleClient;
@@ -351,12 +359,12 @@ export class BaleServerDispatcher {
       if (closed || totalTransferred > 0) return;
       closed = true;
       const reason = this.idleCloseReason(meetTimeout);
-      this.activeMeetCalls.delete(key);
-      this.activeMeetTunnels.delete(key);
+      const logPeer = this.meetLogPeer(callId, displayPeer);
+      this.finishMeetCall(callId);
       closeMgr(reason);
       try { transport.close(reason); } catch { /* ignore */ }
       client.discardCall(callId).catch(() => undefined);
-      this.log(`webrtc tunnel closed for callId=${callId} peer=${this.keyFor(effectivePeer)}: ${reason}`);
+      this.log(`webrtc tunnel closed for callId=${callId} peer=${this.keyFor(logPeer)}: ${reason}`);
     });
     const trackedHandle = this.withTransferTracking(handle, (n) => {
       if (n <= 0) return;
@@ -382,13 +390,13 @@ export class BaleServerDispatcher {
       if (closed) return;
       closed = true;
       idleTimer = clearTimer(idleTimer);
-      this.activeMeetCalls.delete(key);
-      this.activeMeetTunnels.delete(key);
+      const logPeer = this.meetLogPeer(callId, displayPeer);
+      this.finishMeetCall(callId);
       const reason = `handshake hard timeout after ${BaleServerDispatcher.HANDSHAKE_HARD_TIMEOUT_MS}ms`;
       closeMgr(reason);
       try { transport.close(reason); } catch { /* ignore */ }
       client.discardCall(callId).catch(() => undefined);
-      this.log(`${reason} for callId=${callId} peer=${this.keyFor(effectivePeer)}`);
+      this.log(`${reason} for callId=${callId} peer=${this.keyFor(logPeer)}`);
     }, BaleServerDispatcher.HANDSHAKE_HARD_TIMEOUT_MS);
     if (typeof (handshakeTimeoutId as unknown as { unref?: () => void }).unref === 'function') {
       (handshakeTimeoutId as unknown as { unref: () => void }).unref();
@@ -397,16 +405,16 @@ export class BaleServerDispatcher {
     runPromise
       .then((mux) => {
         clearTimeout(handshakeTimeoutId);
-        this.log(`webrtc handshake OK for callId=${callId} peer=${this.keyFor(effectivePeer)}`);
+        this.log(`webrtc handshake OK for callId=${callId} peer=${this.keyFor(this.meetLogPeer(callId, displayPeer))}`);
         mux.onClose((reason) => {
           if (closed) return;
           closed = true;
           idleTimer = clearTimer(idleTimer);
-          this.activeMeetCalls.delete(key);
-          this.activeMeetTunnels.delete(key);
+          const logPeer = this.meetLogPeer(callId, displayPeer);
+          this.finishMeetCall(callId);
           closeMgr(reason);
           try { transport.close(reason); } catch { /* ignore */ }
-          this.log(`webrtc tunnel closed for callId=${callId} peer=${this.keyFor(effectivePeer)}: ${reason}`);
+          this.log(`webrtc tunnel closed for callId=${callId} peer=${this.keyFor(logPeer)}: ${reason}`);
           client.discardCall(callId).catch(() => undefined);
         });
       })
@@ -415,13 +423,13 @@ export class BaleServerDispatcher {
         if (closed) return;
         closed = true;
         idleTimer = clearTimer(idleTimer);
-        this.activeMeetCalls.delete(key);
-        this.activeMeetTunnels.delete(key);
+        const logPeer = this.meetLogPeer(callId, displayPeer);
+        this.finishMeetCall(callId);
         const reason = `webrtc handshake failed: ${(e as Error).message}`;
         closeMgr(reason);
         try { transport.close(reason); } catch { /* ignore */ }
         client.discardCall(callId).catch(() => undefined);
-        this.log(`${reason} for callId=${callId} peer=${this.keyFor(effectivePeer)}`);
+        this.log(`${reason} for callId=${callId} peer=${this.keyFor(logPeer)}`);
       });
   }
 
@@ -460,6 +468,10 @@ export class BaleServerDispatcher {
 
   private queueMeetOffer(peer: Peer, callId: bigint): void {
     const key = this.meetKey(callId);
+    if (this.isRecentlyFinishedMeetCall(callId)) {
+      this.log(`ignored recently finished meet-offer from ${this.keyFor(peer)} callId=${callId}`);
+      return;
+    }
     if (this.activeMeetCalls.has(key) || this.pendingMeetOffers.has(key)) {
       this.log(`duplicate meet-offer for callId=${callId}; ignoring`);
       return;
@@ -467,8 +479,6 @@ export class BaleServerDispatcher {
     this.meetOfferPeers.set(key, peer);
     this.log(`meet-offer from ${this.keyFor(peer)} callId=${callId}; waiting for incoming-call push`);
     const timer = setTimeout(() => {
-      this.pendingMeetOffers.delete(key);
-      this.meetOfferPeers.delete(key);
       this.runMeetOfferFallback(peer, callId).catch((e) => {
         this.log(`meet-offer fallback failed for ${callId}: ${(e as Error).message}`);
       });
@@ -480,7 +490,10 @@ export class BaleServerDispatcher {
   }
 
   private async runMeetOfferFallback(peer: Peer, callId: bigint): Promise<void> {
-    if (this.activeMeetCalls.has(this.meetKey(callId))) return;
+    if (this.activeMeetCalls.has(this.meetKey(callId))) {
+      this.clearPendingMeetOffer(callId);
+      return;
+    }
     if (this.opts.restartIncomingCalls) {
       this.log(`meet-offer fallback for ${callId}; restarting incoming-call watcher`);
       try {
@@ -489,7 +502,10 @@ export class BaleServerDispatcher {
         this.log(`incoming-call watcher restart failed for ${callId}: ${(e as Error).message}`);
       }
       await delay(750);
-      if (this.activeMeetCalls.has(this.meetKey(callId))) return;
+      if (this.activeMeetCalls.has(this.meetKey(callId))) {
+        this.clearPendingMeetOffer(callId);
+        return;
+      }
     }
     await this.spawnMeetTunnel(peer, callId);
   }
@@ -514,6 +530,45 @@ export class BaleServerDispatcher {
 
   private meetKey(callId: bigint): string {
     return String(callId);
+  }
+
+  private meetLogPeer(callId: bigint, fallbackPeer: Peer): Peer {
+    const entry = this.activeMeetTunnels.get(this.meetKey(callId));
+    return entry?.effectivePeer ?? fallbackPeer;
+  }
+
+  private finishMeetCall(callId: bigint): void {
+    const key = this.meetKey(callId);
+    this.activeMeetCalls.delete(key);
+    this.activeMeetTunnels.delete(key);
+    this.clearPendingMeetOffer(callId);
+    this.rememberFinishedMeetCall(callId);
+  }
+
+  private discardMeetCall(callId: bigint, reason: string): void {
+    this.finishMeetCall(callId);
+    this.log(`discarding meet callId=${callId}: ${reason}`);
+    this.opts.baleClient?.discardCall(callId).catch(() => undefined);
+  }
+
+  private rememberFinishedMeetCall(callId: bigint): void {
+    const now = Date.now();
+    this.recentlyFinishedMeetCalls.set(
+      this.meetKey(callId),
+      now + BaleServerDispatcher.RECENT_MEET_CALL_TTL_MS,
+    );
+    this.pruneRecentlyFinishedMeetCalls(now);
+  }
+
+  private isRecentlyFinishedMeetCall(callId: bigint): boolean {
+    this.pruneRecentlyFinishedMeetCalls();
+    return this.recentlyFinishedMeetCalls.has(this.meetKey(callId));
+  }
+
+  private pruneRecentlyFinishedMeetCalls(now = Date.now()): void {
+    for (const [key, expiresAt] of this.recentlyFinishedMeetCalls) {
+      if (expiresAt <= now) this.recentlyFinishedMeetCalls.delete(key);
+    }
   }
 
   private peerFromCallResult(result: StartCallResult): Peer {
@@ -628,6 +683,7 @@ export class BaleServerDispatcher {
       setProtocolVersion: (protocolVersion) => handle.setProtocolVersion(protocolVersion),
       setTerminationState: (state) => handle.setTerminationState(state),
       setClientInfo: (clientType, clientVersion) => handle.setClientInfo(clientType, clientVersion),
+      setClientKind: (clientKind) => handle.setClientKind(clientKind),
     };
   }
 

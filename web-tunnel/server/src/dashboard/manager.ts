@@ -338,6 +338,10 @@ export class TunnelManager extends EventEmitter {
         state.summary.clientVersion = clientVersion;
         this.emit('tunnel-updated', cloneTunnelSnapshot(state));
       },
+      setClientKind: (clientKind) => {
+        state.summary.clientKind = clientKind;
+        this.emit('tunnel-updated', cloneTunnelSnapshot(state));
+      },
     };
     return { id, close, handle };
   }
@@ -421,6 +425,7 @@ export interface TunnelHandle {
   setProtocolVersion(protocolVersion: number | null): void;
   setTerminationState(state: 'idle' | 'terminating' | 'terminated' | 'failed'): void;
   setClientInfo(clientType: string | null, clientVersion: string | null): void;
+  setClientKind(clientKind: 'managed' | 'legacy' | null): void;
 }
 
 function cloneStream(stream: StreamSummary): StreamSummary {
