@@ -173,4 +173,107 @@ describe('latest electron server/client with mock webrtc', () => {
       fs.rmSync(sessionRoot, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it('accepts old clients that do not send managed config metadata', async () => {
+    for (const key of envKeys) originalEnv.set(key, process.env[key]);
+    process.env.WT_LIVEKIT_MODE = 'mock';
+    process.env.WT_MOCK_LIVEKIT_PORT = String(await freePort());
+    process.env.WT_DASHBOARD_PORT = String(await freePort());
+    process.env.WT_DASHBOARD_HOST = '127.0.0.1';
+
+    const backend = await bootBackend();
+    const bus = new MockBalBus();
+    const serverSidecar = new MockSidecar(bus, { id: 500, name: 'server' });
+    const clientSidecar = new MockSidecar(bus, { id: 700, name: 'legacy client' });
+    const sessionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-e2e-legacy-'));
+    const server = new ServerController({ sessionFile: path.join(sessionRoot, 'server-session.json') });
+    const clientSessionFile = path.join(sessionRoot, 'client-session.json');
+    let client: Controller | null = null;
+
+    try {
+      const serverSession: BaleSession = {
+        jwt: 'server-jwt',
+        userId: 500n,
+        userName: 'server',
+        userAccessHash: 5000n,
+      };
+      const clientAccountSession: BaleSession = {
+        jwt: 'client-jwt',
+        userId: 700n,
+        userName: 'legacy client',
+        userAccessHash: 7000n,
+      };
+      const serverMutable = server as unknown as {
+        sidecar: MockSidecar;
+        status: ServerStatus;
+        client: { loadSession(session: BaleSession): void };
+        configClient: { loadSession(session: BaleSession): void };
+      };
+      serverMutable.client.loadSession(serverSession);
+      serverMutable.configClient.loadSession(clientAccountSession);
+      serverMutable.sidecar = serverSidecar;
+      serverMutable.status.loginStage = 'ready';
+      serverMutable.status.me = { id: 500, name: 'server', phone: null };
+      serverMutable.status.serverAccount = {
+        loginStage: 'ready',
+        pendingPhone: null,
+        me: { id: 500, name: 'server', phone: null },
+        lastError: null,
+      };
+      serverMutable.status.clientAccount = {
+        loginStage: 'ready',
+        pendingPhone: null,
+        me: { id: 700, name: 'legacy client', phone: null },
+        lastError: null,
+      };
+
+      await server.startServer('secret');
+      const serverFingerprint = server.getStatus().serverFingerprint;
+      if (!serverFingerprint) throw new Error('server fingerprint was not set after start');
+      fs.writeFileSync(
+        path.join(sessionRoot, 'server-key-pins.json'),
+        JSON.stringify({ 'PRIVATE:500': serverFingerprint }, null, 2),
+      );
+
+      client = new Controller({
+        sessionFile: clientSessionFile,
+        livekitFactory: buildLivekitFactory() ?? undefined,
+      });
+
+      const managedClient = await server.createClient('compat shim');
+      await client.importClientConfig(managedClient.config);
+      (client as unknown as { sidecar: MockSidecar }).sidecar = clientSidecar;
+      (client as unknown as { clientMetadata: () => Record<string, string | number> }).clientMetadata = () => ({
+        clientType: 'android',
+        clientVersion: '0.2.2',
+      });
+
+      const socksPort = await freePort();
+      await client.startTunnel({
+        password: 'secret',
+        socksPort,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      expect(server.getStatus().connections).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            clientKind: 'legacy',
+            clientType: 'android',
+            clientVersion: '0.2.2',
+          }),
+        ]),
+      );
+
+      const resp = await socks5Get(socksPort, '127.0.0.1', backend.port);
+      expect(resp).toContain('HTTP/1.1 200');
+      expect(resp).toContain('controller-webrtc-mock-ok');
+    } finally {
+      if (client) await client.dispose();
+      await server.dispose();
+      await backend.close();
+      await serverSidecar.close();
+      await clientSidecar.close();
+      fs.rmSync(sessionRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
 });

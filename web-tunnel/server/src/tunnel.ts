@@ -80,6 +80,12 @@ export async function runServerTunnelV2(
   opts: RunServerTunnelV2Options,
 ): Promise<RunServerTunnelV2Result> {
   const hs = await serverHandshakeV2(transport, opts.identity);
+  const metadataClientId = typeof hs.clientMetadata?.webTunnelClientId === 'string'
+    ? hs.clientMetadata.webTunnelClientId.trim()
+    : '';
+  if (!metadataClientId) {
+    opts.handle?.setClientKind('legacy');
+  }
   if (opts.onClientMetadata) {
     try {
       await opts.onClientMetadata(hs.clientMetadata, opts.handle?.id ?? null);

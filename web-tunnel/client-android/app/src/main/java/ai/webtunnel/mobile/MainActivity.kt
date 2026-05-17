@@ -455,7 +455,7 @@ class MainActivity : AppCompatActivity() {
   private fun maybeApplyAutoStart(state: ControllerState) {
     val config = autoStartConfig ?: return
     if (autoStartConsumed) return
-    if (state.loginStage != LoginStage.READY || state.tunnel != null || state.chats.isEmpty()) return
+    if (state.loginStage != LoginStage.READY || state.tunnel != null || state.connectingEvents != null || state.chats.isEmpty()) return
     if (state.busy) return
 
     render(state)
@@ -512,19 +512,8 @@ class MainActivity : AppCompatActivity() {
           selected = request.selected,
           socksPort = request.socksPort,
         )
-        val tunnel = newState.tunnel ?: return@launch
-        try {
-          TunnelVpnBridge.start(
-            applicationContext,
-            TunnelVpnConfig(
-              sessionLabel = "Web Tunnel ${tunnel.serverLabel}",
-              socksPort = tunnel.socksPort,
-            ),
-          )
-          TunnelForegroundService.start(applicationContext, tunnel.serverLabel)
-        } catch (error: Throwable) {
-          controller.stopTunnel()
-          render(uiState.copy(lastError = "start VPN failed: ${error.message}"))
+        if (newState.tunnel == null && newState.connectingEvents == null) {
+          render(newState)
         }
       } catch (error: Throwable) {
         render(uiState.copy(lastError = "start tunnel failed: ${error.message}"))

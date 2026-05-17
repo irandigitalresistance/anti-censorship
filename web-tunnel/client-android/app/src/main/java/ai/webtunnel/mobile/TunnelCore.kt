@@ -2,17 +2,22 @@ package ai.webtunnel.mobile
 
 import android.content.Context
 import android.util.Log
+import io.livekit.android.AudioOptions
+import io.livekit.android.ConnectOptions
 import io.livekit.android.LiveKit
+import io.livekit.android.LiveKitOverrides
+import io.livekit.android.RoomOptions
+import io.livekit.android.audio.NoAudioHandler
 import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
 import io.livekit.android.room.Room
 import io.livekit.android.room.participant.Participant
+import io.livekit.android.room.track.DataPublishReliability
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.EOFException
@@ -26,11 +31,21 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
+import java.util.concurrent.PriorityBlockingQueue
+import java.util.concurrent.Semaphore
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 interface Transport {
   fun send(bytes: ByteArray)
+  fun sendPriority(bytes: ByteArray) {
+    send(bytes)
+  }
+  fun sendUnreliable(bytes: ByteArray) {
+    sendPriority(bytes)
+  }
   fun onMessage(cb: (ByteArray) -> Unit)
   fun onClose(cb: (String) -> Unit)
   fun close(reason: String = "transport closed")
@@ -364,7 +379,9 @@ class LiveKitTransport(
   private var onMessageHandler: ((ByteArray) -> Unit)? = null
   private var onCloseHandler: ((String) -> Unit)? = null
   private val closed = AtomicBoolean(false)
-  private val sendQueue = Channel<ByteArray>(Channel.UNLIMITED)
+  private val sendQueue = PriorityBlockingQueue<OutboundPacket>()
+  private val sendSignal = Semaphore(0)
+  private val sendSeq = AtomicLong(0L)
   private val receiveQueue = Channel<ByteArray>(Channel.UNLIMITED)
   private val eventsJob: Job = scope.launch(Dispatchers.IO) {
     room.events.collect { event ->
@@ -383,6 +400,17 @@ class LiveKitTransport(
         is RoomEvent.Disconnected -> {
           if (closed.compareAndSet(false, true)) {
             onCloseHandler?.invoke("disconnected")
+          }
+        }
+        is RoomEvent.Reconnecting -> {
+          Log.w("WebTunnel", "LiveKit reconnecting")
+        }
+        is RoomEvent.Reconnected -> {
+          Log.d("WebTunnel", "LiveKit reconnected")
+        }
+        is RoomEvent.FailedToConnect -> {
+          if (closed.compareAndSet(false, true)) {
+            onCloseHandler?.invoke("livekit failed to connect: ${event.error.message ?: "unknown"}")
           }
         }
         else -> Unit
@@ -404,11 +432,21 @@ class LiveKitTransport(
     }
   }
   private val sendJob: Job = scope.launch(Dispatchers.IO) {
-    for (bytes in sendQueue) {
+    while (!closed.get()) {
+      try {
+        sendSignal.acquire()
+      } catch (_: InterruptedException) {
+        break
+      }
       if (closed.get()) continue
+      val packet = sendQueue.poll() ?: continue
       try {
         val identities = if (peerIdentity != null) listOf(Participant.Identity(peerIdentity)) else null
-        val result = room.localParticipant.publishData(bytes, identities = identities)
+        val result = room.localParticipant.publishData(
+          packet.bytes,
+          reliability = packet.reliability,
+          identities = identities,
+        )
         if (result.isFailure && closed.compareAndSet(false, true)) {
           onCloseHandler?.invoke("publishData failed: ${result.exceptionOrNull()?.message ?: "unknown"}")
           break
@@ -423,11 +461,21 @@ class LiveKitTransport(
   }
 
   override fun send(bytes: ByteArray) {
+    enqueueOutbound(bytes, priority = 1, reliability = DataPublishReliability.RELIABLE)
+  }
+
+  override fun sendPriority(bytes: ByteArray) {
+    enqueueOutbound(bytes, priority = 0, reliability = DataPublishReliability.RELIABLE)
+  }
+
+  override fun sendUnreliable(bytes: ByteArray) {
+    enqueueOutbound(bytes, priority = 0, reliability = DataPublishReliability.LOSSY)
+  }
+
+  private fun enqueueOutbound(bytes: ByteArray, priority: Int, reliability: DataPublishReliability) {
     if (closed.get()) return
-    val offered = sendQueue.trySend(bytes.copyOf())
-    if (!offered.isSuccess && closed.compareAndSet(false, true)) {
-      onCloseHandler?.invoke("publishData failed: send queue closed")
-    }
+    sendQueue.offer(OutboundPacket(priority, sendSeq.getAndIncrement(), bytes.copyOf(), reliability))
+    sendSignal.release()
   }
 
   override fun onMessage(cb: (ByteArray) -> Unit) {
@@ -441,7 +489,8 @@ class LiveKitTransport(
 
   override fun close(reason: String) {
     if (!closed.compareAndSet(false, true)) return
-    sendQueue.close()
+    sendQueue.clear()
+    sendSignal.release()
     receiveQueue.close()
     eventsJob.cancel()
     receiveJob.cancel()
@@ -453,6 +502,18 @@ class LiveKitTransport(
         onCloseHandler?.invoke(reason)
       }
     }
+  }
+}
+
+private data class OutboundPacket(
+  val priority: Int,
+  val seq: Long,
+  val bytes: ByteArray,
+  val reliability: DataPublishReliability,
+) : Comparable<OutboundPacket> {
+  override fun compareTo(other: OutboundPacket): Int {
+    val byPriority = priority.compareTo(other.priority)
+    return if (byPriority != 0) byPriority else seq.compareTo(other.seq)
   }
 }
 
@@ -471,6 +532,7 @@ class Socks5Server(
 ) {
   private var serverSocket: ServerSocket? = null
   private var acceptJob: Job? = null
+  private val clientSockets = ConcurrentHashMap.newKeySet<Socket>()
 
   suspend fun start(): Int = withContext(Dispatchers.IO) {
     val server = ServerSocket()
@@ -495,12 +557,16 @@ class Socks5Server(
   suspend fun stop() {
     serverSocket?.close()
     serverSocket = null
-    acceptJob?.cancelAndJoin()
+    clientSockets.forEach { socket ->
+      try { socket.close() } catch (_: Throwable) {}
+    }
+    acceptJob?.cancel()
     acceptJob = null
   }
 
   private suspend fun handleClient(socket: Socket) = withContext(Dispatchers.IO) {
     socket.tcpNoDelay = true
+    clientSockets.add(socket)
     socket.use { sock ->
       var stream: Stream? = null
       var activeAddr: OpenAddress? = null
@@ -614,6 +680,8 @@ class Socks5Server(
         }
         notifyStreamClosed()
         onError?.invoke(error)
+      } finally {
+        clientSockets.remove(socket)
       }
     }
   }
@@ -732,8 +800,25 @@ class Socks5Server(
 
 suspend fun connectLiveKitRoom(context: Context, url: String): Room {
   val (serverUrl, token) = extractLiveKitConnectArgs(url)
-  val room = LiveKit.create(context.applicationContext)
-  room.connect(serverUrl, token)
+  val room = LiveKit.create(
+    context.applicationContext,
+    RoomOptions(),
+    LiveKitOverrides(
+      audioOptions = AudioOptions(
+        audioHandler = NoAudioHandler(),
+        disableCommunicationModeWorkaround = true,
+      ),
+    ),
+  )
+  room.connect(
+    serverUrl,
+    token,
+    ConnectOptions(
+      autoSubscribe = true,
+      audio = false,
+      video = false,
+    ),
+  )
   return room
 }
 

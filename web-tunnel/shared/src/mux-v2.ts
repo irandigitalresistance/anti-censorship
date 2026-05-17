@@ -15,6 +15,8 @@ import {
   type V2LogReport,
 } from './protocol-v2.js';
 
+const WT2_MAX_CHUNK_PAYLOAD = 12_000;
+
 export interface V2Stream {
   readonly id: number;
   readonly addr: OpenAddress;
@@ -51,13 +53,13 @@ export interface TunnelMuxV2Options extends EncodeV2PacketOptions {
   role: 'client' | 'server';
   maxUdpFlows?: number;
   /**
-   * Heartbeat ping interval (ms). Default 5_000. Both sides ping each other —
-   * whoever sees `maxMissedPongs` consecutive misses closes the mux. Tight
-   * defaults exist because the LiveKit data channel goes silent (~20 s) when
-   * nobody is publishing, and we want to detect+reconnect well before that.
+   * Heartbeat ping interval (ms). Default 5_000. Both sides ping each other;
+   * whoever sees `maxMissedPongs` intervals with no valid peer packets closes
+   * the mux. Data packets count as liveness because pong packets can queue
+   * behind heavy reliable data-channel traffic.
    */
   pingIntervalMs?: number;
-  /** Close after this many consecutive missed pongs. Default 3 (≈15 s). */
+  /** Close after this many consecutive missed heartbeat intervals. Default 6. */
   maxMissedPongs?: number;
   /**
    * If true, do not start the heartbeat. Used by tests / short-lived flows
@@ -88,10 +90,12 @@ export class TunnelMuxV2 {
 
   /** Pending ping promises: ts -> resolve/reject */
   private readonly pendingPings = new Map<number, { resolve: (rtt: number) => void; reject: (e: Error) => void; sentAt: number }>();
-  /** Server-side heartbeat tracking */
+  /** Heartbeat tracking */
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private missedPongs = 0;
-  private lastPongAt = 0;
+  private missedHeartbeats = 0;
+  private lastPeerActivityAt = 0;
+  private badPeerPackets = 0;
+  private readonly maxBadPeerPackets = 8;
 
   constructor(opts: TunnelMuxV2Options) {
     this.transport = opts.transport;
@@ -103,12 +107,12 @@ export class TunnelMuxV2 {
     };
     this.maxUdpFlows = Math.max(1, opts.maxUdpFlows ?? 1024);
     this.pingIntervalMs = opts.pingIntervalMs ?? 5_000;
-    this.maxMissedPongs = opts.maxMissedPongs ?? 3;
+    this.maxMissedPongs = opts.maxMissedPongs ?? 6;
     this.disableHeartbeat = opts.disableHeartbeat ?? false;
     this.transport.onMessage((wire) => this.handleWire(wire));
     this.transport.onClose((reason) => this.shutdown(reason));
     if (!this.disableHeartbeat) {
-      // Both sides heartbeat. Whichever side sees N missed pongs closes the
+      // Both sides heartbeat. Whichever side sees N missed heartbeats closes the
       // mux so the upstream reconnect loop can take over.
       this.startHeartbeat();
     }
@@ -136,32 +140,31 @@ export class TunnelMuxV2 {
   }
 
   private startHeartbeat(): void {
-    this.lastPongAt = Date.now();
-    this.missedPongs = 0;
+    this.lastPeerActivityAt = Date.now();
+    this.missedHeartbeats = 0;
     this.heartbeatTimer = setInterval(() => {
       if (this.closed) {
         this.stopHeartbeat();
         return;
       }
-      // If we've gone more than pingIntervalMs without a pong since our last
-      // ping, count that as one missed beat. Reset on any pong (handled in
-      // handleWire's 'pong' case).
-      const sincePong = Date.now() - this.lastPongAt;
-      if (sincePong > this.pingIntervalMs) {
-        this.missedPongs += 1;
+      // Any valid packet from the peer proves the channel is alive. Relying
+      // only on pong is too strict when reliable data traffic is backlogged.
+      const sinceActivity = Date.now() - this.lastPeerActivityAt;
+      if (sinceActivity > this.pingIntervalMs) {
+        this.missedHeartbeats += 1;
       }
-      if (this.missedPongs >= this.maxMissedPongs) {
+      if (this.missedHeartbeats >= this.maxMissedPongs) {
         this.stopHeartbeat();
-        const reason = `keepalive timeout — ${this.missedPongs} missed pongs (${Math.round(sincePong / 1000)}s silent)`;
+        const reason = `keepalive timeout - ${this.missedHeartbeats} missed heartbeats (${Math.round(sinceActivity / 1000)}s without peer traffic)`;
         this.shutdown(reason);
         try { this.transport.close(reason); } catch { /* ignore */ }
         return;
       }
       try {
-        this.sendControl({ kind: 'ping', ts: Date.now() });
+        this.sendHeartbeatControl({ kind: 'ping', ts: Date.now() });
       } catch (e) {
-        // sendControl can throw if the transport is mid-teardown — treat as miss.
-        this.missedPongs += 1;
+        // sendControl can throw if the transport is mid-teardown; treat as miss.
+        this.missedHeartbeats += 1;
       }
     }, this.pingIntervalMs);
     if (typeof (this.heartbeatTimer as unknown as { unref?: () => void }).unref === 'function') {
@@ -241,11 +244,26 @@ export class TunnelMuxV2 {
     this.sendPacket('control', 0, encodeV2ControlMessage(message), WT2_FLAG_RELIABLE);
   }
 
-  private sendPacket(type: 'control' | 'tcp' | 'udp' | 'log', channelId: number, payload: Uint8Array, flags = 0): void {
+  private sendHeartbeatControl(message: V2ControlMessage): void {
+    this.sendPacket('control', 0, encodeV2ControlMessage(message), WT2_FLAG_RELIABLE, 'unreliable');
+  }
+
+  private sendPacket(
+    type: 'control' | 'tcp' | 'udp' | 'log',
+    channelId: number,
+    payload: Uint8Array,
+    flags = 0,
+    delivery: 'normal' | 'priority' | 'unreliable' = type === 'control' ? 'priority' : 'normal',
+  ): void {
     if (this.closed) return;
     const wire = encodeV2Packet({ type, channelId, payload, flags }, this.encodeOpts);
     const encrypted = this.cipher.encrypt(wire);
-    void this.transport.send(encrypted);
+    const send = delivery === 'unreliable' && this.transport.sendUnreliable
+      ? this.transport.sendUnreliable.bind(this.transport)
+      : delivery !== 'normal' && this.transport.sendPriority
+      ? this.transport.sendPriority.bind(this.transport)
+      : this.transport.send.bind(this.transport);
+    void send(encrypted);
   }
 
   private handleWire(wire: Uint8Array): void {
@@ -254,20 +272,27 @@ export class TunnelMuxV2 {
     try {
       plain = this.cipher.decrypt(wire);
     } catch {
-      const reason = 'decryption failed: possible network corruption or key mismatch';
-      this.shutdown(reason);
-      try { this.transport.close(reason); } catch { /* ignore */ }
+      const reason = this.recordBadPeerPacket('decryption failed: possible network corruption or key mismatch');
+      if (reason) {
+        this.shutdown(reason);
+        try { this.transport.close(reason); } catch { /* ignore */ }
+      }
       return;
     }
     let packet;
     try {
       packet = decodeV2Packet(plain);
     } catch {
-      const reason = 'received malformed data from peer';
-      this.shutdown(reason);
-      try { this.transport.close(reason); } catch { /* ignore */ }
+      const reason = this.recordBadPeerPacket('received malformed data from peer');
+      if (reason) {
+        this.shutdown(reason);
+        try { this.transport.close(reason); } catch { /* ignore */ }
+      }
       return;
     }
+    this.badPeerPackets = 0;
+    this.lastPeerActivityAt = Date.now();
+    this.missedHeartbeats = 0;
     switch (packet.type) {
       case 'control':
         this.handleControl(packet.payload);
@@ -345,12 +370,10 @@ export class TunnelMuxV2 {
         return;
       }
       case 'ping': {
-        this.sendControl({ kind: 'pong', ts: msg.ts });
+        this.sendHeartbeatControl({ kind: 'pong', ts: msg.ts });
         return;
       }
       case 'pong': {
-        this.lastPongAt = Date.now();
-        this.missedPongs = 0;
         const pending = this.pendingPings.get(msg.ts);
         if (pending) {
           this.pendingPings.delete(msg.ts);
@@ -359,6 +382,12 @@ export class TunnelMuxV2 {
         return;
       }
     }
+  }
+
+  private recordBadPeerPacket(baseReason: string): string | null {
+    this.badPeerPackets += 1;
+    if (this.badPeerPackets < this.maxBadPeerPackets) return null;
+    return `${baseReason} (${this.badPeerPackets} consecutive bad packets)`;
   }
 
   private createStream(id: number, addr: OpenAddress): V2StreamImpl {
@@ -373,7 +402,7 @@ export class TunnelMuxV2 {
       },
       write: (data) => {
         if (streamClosed || this.closed) return;
-        for (const chunk of chunkPayload(data)) {
+        for (const chunk of chunkPayload(data, WT2_MAX_CHUNK_PAYLOAD)) {
           this.sendPacket('tcp', id, chunk, WT2_FLAG_RELIABLE);
         }
       },
