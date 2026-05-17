@@ -1,46 +1,69 @@
 # anti-censorship
 
-A circumvention tunnel that smuggles arbitrary TCP/UDP traffic through messages
-exchanged on the **Bale** messenger (an Iranian chat app that is not blocked
-inside the censored region). A user inside the firewall runs a small client
-app, the operator runs a server outside the firewall on their own VPS, and
-their two Bale accounts talk to each other to move bytes — to the network it
-just looks like two friends chatting.
+A circumvention tunnel that smuggles arbitrary TCP/UDP traffic through the
+**Bale** messenger (an Iranian chat app that is not blocked inside the censored
+region). The operator runs a server outside the firewall on their own VPS and
+**logs in both Bale accounts there** — the server's own account *and* a client
+account they provision on the end user's behalf. The end user inside the
+firewall runs a small client app and only ever imports an operator-issued
+config blob; they never log into Bale, never enter a phone number, never
+receive an OTP. The two operator-controlled Bale identities talk to each other
+to move bytes — to the network it just looks like two accounts on a call.
+
+Keeping the client's Bale credentials on the server (not on the end user's
+device, and never created by the end user) is a deliberate **safety choice**:
+the person being protected never ties their real phone number or personal Bale
+account to circumvention traffic, and a burned tunnel account is the
+operator's throwaway, not theirs. See
+[Account model](#account-model-the-server-holds-both-bale-identities) below.
 
 The actual code lives under [`web-tunnel/`](./web-tunnel) as a pnpm monorepo.
 
 ## How it works (one-paragraph version)
 
-Each side has a Bale account. The client opens a local **SOCKS5 proxy** on
-`127.0.0.1:1080`. When an app connects to that proxy, the client wraps the
-target address into a framed packet, encrypts it with a key derived from a
-**shared password** (scrypt → AEAD), splits it into chat-message-sized chunks,
-and *sends them as Bale messages* to the server's account. The server's Bale
-account receives the chunks, the dispatcher reassembles and decrypts them,
-opens a real TCP/UDP connection to the destination, and proxies bytes back the
-same way. To Bale (and to anyone watching the network) it's two ordinary
-accounts trading text.
+The operator logs in two Bale accounts on the server and, for each end user,
+generates an **encrypted client config** — a `wtc1:…` blob that carries the
+client account's Bale session plus the server's address and pinned identity.
+The end user imports that single string into the client app; that's the entire
+"login". The client app loads the embedded Bale session, places a Bale **Meet
+call** to the server account, and the two accounts open a LiveKit/WebRTC data
+channel. The client opens a local **SOCKS5 proxy** on `127.0.0.1:1080`; when an
+app connects, the client wraps the target address into a framed packet,
+encrypts it (AEAD, with the server's identity pinned from the config), and
+sends it over the call's data channel. The server side reassembles and
+decrypts, opens a real TCP/UDP connection to the destination, and proxies bytes
+back the same way. To Bale (and anyone watching the network) it looks like two
+accounts on an ordinary voice call.
 
 ```
-   ┌──────────────┐    SOCKS5     ┌──────────────┐
-   │  user's app  │ ────────────▶ │ client app   │
-   └──────────────┘               │ (Electron /  │
-                                  │  Android)    │
-                                  └──────┬───────┘
-                                         │ encrypted, framed
-                                         ▼ chat messages
-                                  ┌──────────────┐
-                                  │ Bale servers │  ← looks like normal chat
-                                  └──────┬───────┘
-                                         │
-                                  ┌──────▼───────┐
-                                  │ server (Node │
-                                  │  + Python    │
-                                  │  Bale sidecar)│
-                                  └──────┬───────┘
-                                         │ real TCP/UDP
-                                         ▼
-                                    open internet
+   operator's machine, outside the firewall
+   ┌───────────────────────────────────────────────┐
+   │ server: runs BOTH Bale accounts                │
+   │   • server account  (the exit node)            │
+   │   • client account  (provisioned for the user) │
+   │ mints  ┌───────────────────────────────┐       │
+   │ ─────▶ │ encrypted client config (wtc1:)│       │
+   │        └───────────────┬───────────────┘       │
+   └────────────────────────┼───────────────────────┘
+                            │ handed to the user out-of-band
+                            ▼ (no Bale login on the user's side)
+   ┌──────────────┐  SOCKS5  ┌──────────────┐
+   │  user's app  │ ───────▶ │ client app   │  loads the embedded
+   └──────────────┘          │ (Electron /  │  client Bale session
+                             │  Android)    │
+                             └──────┬───────┘
+                                    │ Bale Meet call →
+                                    ▼ LiveKit/WebRTC data channel
+                             ┌──────────────┐
+                             │ Bale servers │ ← looks like a voice call
+                             └──────┬───────┘  between two accounts
+                                    │
+                             ┌──────▼───────┐
+                             │ server side  │ decrypts, egresses
+                             └──────┬───────┘
+                                    │ real TCP/UDP
+                                    ▼
+                               open internet
 ```
 
 ## Repository layout
@@ -51,20 +74,25 @@ workspace defines six packages plus two app shells:
 | Path | What it is |
 |---|---|
 | `web-tunnel/shared/` | Protocol primitives shared by every component: framing, AEAD handshake (PSK + Noble crypto), stream multiplexer (`mux`, `mux-v2`), Bale gRPC-Web client, LiveKit transport, mocks. |
-| `web-tunnel/client/` | Headless Node client. Opens the local SOCKS5 listener and runs the tunnel over a `Transport` (WebSocket loopback for dev, Bale chat in prod). |
+| `web-tunnel/client/` | Headless Node client. Opens the local SOCKS5 listener and runs the tunnel over a `Transport` (WebSocket loopback for dev, Bale Meet/WebRTC in prod). |
 | `web-tunnel/server/` | Headless Node server. Accepts tunnels, multiplexes streams, egresses to the real internet, hosts the loopback dashboard on `:4402`. |
-| `web-tunnel/server/py/` | Python "Bale sidecar" (`bale_sidecar`). Wraps the unofficial Bale gRPC API; handles login (phone → OTP → JWT) and message I/O for the server. |
-| `web-tunnel/client-electron/` | Windows desktop app. Wraps the client in Electron + a small UI for phone login, chat-picker, and Start/Stop. Builds to `WebTunnel-Client.exe`. |
-| `web-tunnel/server-electron/` | Same idea for the operator's server (one-binary install on Windows VPS). |
-| `web-tunnel/client-android/` | Native Android client (Kotlin). VPN-service mode using `hev-socks5-tunnel` to capture all device traffic into the SOCKS5 proxy. |
+| `web-tunnel/server/py/` | Python "Bale sidecar" (`bale_sidecar`). Wraps the unofficial Bale gRPC API; handles login (phone → OTP → JWT) and message I/O. (`server-electron` uses an in-process native TS sidecar instead.) |
+| `web-tunnel/shared/src/client-config.ts` | The `wtc1:` client config: AES-GCM packing of the client Bale session + server peer + server UUID + pinned fingerprint. Encoded on the server, decoded by every client app. |
+| `web-tunnel/client-electron/` | Windows desktop app. Wraps the client in Electron. No Bale login UI — the user pastes the operator-issued config and hits Start/Stop. Builds to `WebTunnel-Client.exe`. |
+| `web-tunnel/server-electron/` | The operator's server (one-binary install on Windows VPS). Logs in **both** Bale accounts, mints per-user client configs, runs the dashboard. |
+| `web-tunnel/client-android/` | Native Android client (Kotlin). Imports the operator-issued config; VPN-service mode using `hev-socks5-tunnel` to capture all device traffic into the SOCKS5 proxy. |
 | `web-tunnel/probe/` | Throwaway scripts and end-to-end probes used during development (network captures, WebRTC sanity checks). |
 
 ## Protocol, in layers
 
-1. **Carrier.** Whatever bidirectional message bus is available to a pair of
-   Bale accounts: the chat itself (low throughput, ~5–30 KB/s, always works),
-   or a LiveKit WebRTC room created via Bale's `Meet/StartCall` RPC (high
-   throughput, built and tested against mocks but not fully wired in v1).
+1. **Carrier.** A bidirectional byte channel between the operator's two Bale
+   accounts. Managed-config clients use a **LiveKit WebRTC data channel**
+   created via Bale's `Meet/StartCall` RPC (high throughput): the client app
+   places a Meet call to the server account, the server's incoming-call
+   watcher accepts it, and both join the same LiveKit room. A chat-message
+   carrier (low throughput, ~5–30 KB/s) also exists in `shared/` for the
+   legacy/headless path. The call carrier is wired end-to-end in
+   `server-electron`/`client-electron`/`client-android` but is still beta.
 2. **Magic envelope.** Every payload begins with a 4-byte magic
    (`__WT_REQ__`, `__WT_OK__`, `__WT_FRAME__`, …) so the receiver can tell
    tunnel traffic apart from real chat messages and ignore the rest.
@@ -86,6 +114,62 @@ servers your messages flow through, they can read every chat, and they
 co-operate with the regulator. So everything sensitive is sealed before it
 ever touches a Bale API call. The only thing Bale handles is opaque ciphertext
 wrapped in a magic prefix.
+
+### Account model: the server holds both Bale identities
+
+The most important safety property is *who* holds the Bale credentials. The
+**operator runs the server outside the firewall and logs in two Bale accounts
+there**:
+
+- the **server account** — the exit node's Bale identity, and
+- a **client account** — a Bale account the operator registers and provisions
+  *on behalf of the end user*.
+
+The end user never logs into Bale. In the server UI the operator creates a
+named client profile, and the server emits an **encrypted client config**
+(`encodeClientConfig` in
+[`shared/src/client-config.ts`](./web-tunnel/shared/src/client-config.ts)) — a
+single `wtc1:…` string that packs:
+
+- the client account's Bale session (`jwt`, `userId`, `userName`,
+  `userAccessHash`),
+- the server peer to call (`chatId`, `chatType`, label),
+- the server's `serverUuid` and pinned Ed25519 `serverFingerprint`,
+- the carrier (`webrtc`) and default SOCKS port,
+- a per-config `clientId`.
+
+The operator hands that one string to the end user out-of-band. The client app
+(Windows or Android) calls `decodeClientConfig`, loads the embedded Bale
+session, and runs the tunnel. There is **no phone-number entry, no OTP, no
+chat-picker, no shared password to type** on the user's side — importing the
+blob is the entire setup.
+
+**Why this protects the end user.** The person inside the censored region is
+the one at risk. With this model:
+
+- Their **real phone number and personal Bale account are never used** and
+  never linked to circumvention traffic. The account that does the tunnelling
+  is a throwaway the operator created.
+- They never have to **perform a Bale OTP login on a monitored network** —
+  that login (SMS, phone entry, new-device registration on a fresh account) is
+  itself a signal, and it happens on the operator's side instead.
+- If Bale flags and bans the tunnelling account, the **operator** absorbs that
+  — the end user just gets a new config. Account bans are expected and cheap.
+- The credential is **per-user and revocable**: the server keys connections by
+  the embedded `clientId`, refuses unknown ids (`CONFIG_UNKNOWN_CLIENT`) and
+  refuses a second concurrent use of the same id (`CONFIG_ALREADY_CONNECTED`).
+  Deleting the client profile on the server instantly cuts that user off
+  without touching anyone else.
+
+**Honest caveat — the config is a bearer token.** `wtc1:` is AES-256-GCM
+*packed*, but with a **fixed key derived from a constant app label**
+(`SHA-256("web-tunnel encrypted client config v1")`), not a per-user secret.
+That layer is obfuscation/integrity-at-rest, **not** confidentiality against
+anyone who has the code. Treat the blob like a password: anyone who obtains it
+holds that client's Bale session and can use the tunnel until the operator
+revokes the profile or the server's pinned fingerprint changes. Deliver it
+over a channel the adversary can't read, and don't reuse one config across
+people.
 
 ### Key derivation and handshake
 
@@ -121,9 +205,10 @@ gets `nonce ‖ ciphertext ‖ tag`. They cannot:
 - replay an old message in a new session (different session key, different
   nonces; mux frames also carry stream IDs and sequence info).
 
-### Wire format on the chat
+### Wire format (chat carrier)
 
-A chat message looks like this:
+When the chat carrier is used (legacy/headless path), a message looks like
+this:
 
 ```
 __WT_FRAME__<sessionTag>.<base64url(ciphertext)>
@@ -143,20 +228,27 @@ This is honest about what it is: it does **not** try to look like normal chat
 is "Bale won't single this out among millions of chats", not "this is
 indistinguishable from a love letter". A motivated platform-side classifier
 that flags long base64-looking messages on a single account would catch it —
-which is why the docs insist on a throwaway server account and the `v2`
-roadmap includes the LiveKit/WebRTC carrier where the bytes ride a real audio
-call instead of chat messages.
+which is why the managed-config path moved to the LiveKit/WebRTC carrier,
+where the bytes ride a real Bale Meet call instead of chat messages, and why
+the tunnelling accounts are operator-owned throwaways.
 
 ### Local secrets
 
-- **Password.** Lives in `WT_PASSWORD` env var on both sides. Never written to
-  disk, never sent to Bale (only its scrypt-derived key is used, and only
-  inside HMAC/HKDF — the PSK itself never goes on the wire).
-- **Bale session JWT.** Stored at `~/.webtunnel/server-session.bale` (server)
-  or in the OS keychain via Electron `safeStorage` (desktop client) — same
-  trust level as your normal Bale login.
-- **Server identity key (v2).** Lives next to the server config; rotating it
-  invalidates pinned client fingerprints, same as an SSH host key.
+- **Server password / PSK.** Set by the operator on the server (`WT_PASSWORD`
+  / Start screen). Derives the dashboard upload HMAC key and seeds the v2 PSK
+  handshake; it is not embedded in the client config and never goes on the
+  wire as plaintext.
+- **Both Bale session JWTs (operator-side).** The server account lives at
+  `~/.webtunnel/server-native-session.json` and the provisioned client account
+  at `~/.webtunnel/server-managed-client-session.json`. Both sit on the
+  operator's machine — guard the server box accordingly, since it holds the
+  keys to every user's tunnel.
+- **Client config blob (user-side).** The `wtc1:` string carries the client
+  Bale session; the client app stores it locally (Electron `safeStorage` /
+  Android `SessionStore`). Bearer credential — see the caveat above.
+- **Server identity key (v2).** `~/.webtunnel/server-v2-identity.json` (Ed25519).
+  Rotating it invalidates the `serverFingerprint` pinned in every issued
+  config, same as an SSH host key — you'd reissue configs.
 
 ### Threats this design does *not* defeat
 
@@ -164,8 +256,10 @@ call instead of chat messages.
   *pattern* (constant chat with one contact, message sizes, inter-arrival
   times) is visible to anyone watching the link. A determined adversary doing
   on-path classification could spot it.
-- **Bale account ban.** Bale can detect the high message rate on the server
-  account and disable it. The design assumes accounts are cheap to replace.
+- **Bale account ban.** Bale can detect the abnormal traffic and disable the
+  tunnelling accounts. The design assumes accounts are cheap to replace —
+  and, by holding both accounts operator-side, a ban hits the operator's
+  throwaways, not the end user's personal account.
 - **Endpoint compromise.** If the client device is rooted or the server VPS is
   taken over, all the crypto in the world doesn't help.
 - **Quantum.** No post-quantum primitives in v1. Anything Bale records today
@@ -179,8 +273,8 @@ The full operator and end-user guides already live next to the code:
 - **Server operator:** [`web-tunnel/server/SERVER-SETUP.md`](./web-tunnel/server/SERVER-SETUP.md)
   — VPS install, Bale login, systemd unit, dashboard SSH-tunnel.
 - **End user (Windows):** [`web-tunnel/client-electron/CLIENT-SETUP.md`](./web-tunnel/client-electron/CLIENT-SETUP.md)
-  — extract zip, log into Bale, pick the operator's chat, paste shared password,
-  point apps at SOCKS5 `127.0.0.1:1080`.
+  — extract zip, paste the operator-issued `wtc1:` config, hit Start, point
+  apps at SOCKS5 `127.0.0.1:1080`. (No Bale login on the user's side.)
 
 Quick local development loop (no Bale account needed — uses the loopback
 WebSocket transport and mocks):
@@ -201,14 +295,20 @@ pnpm release:android    # signed APK via Gradle
 
 ## Threat model and limits (v1)
 
-- **Authentication is a shared password.** Anyone who knows it gets a tunnel.
-  No per-client approval inbox yet.
-- **Bale account hygiene.** Use a dedicated throwaway account on the server
-  side — heavy framed traffic looks abnormal and risks an account ban.
-- **Throughput** in chat-only mode is bounded by Bale's per-account message
-  rate (~3 msg/sec → 5–30 KB/s). The LiveKit/WebRTC carrier is designed to
-  blow past that ceiling but the call-start glue on the server is still TODO.
-- **Wrong-password handshakes hang silently** in v1; V2 adds an explicit deny.
+- **Authentication is a per-user config blob.** Each client gets its own
+  `wtc1:` config keyed by `clientId`; the server rejects unknown or
+  duplicate-in-use ids, and deleting a profile revokes that user. But the
+  blob is a **bearer token** (fixed-key AES-GCM, no per-user secret) — anyone
+  who gets a copy can use it until it's revoked. Deliver it privately.
+- **The server holds every user's Bale credentials.** That's the safety
+  trade-off: the end user is never exposed, but the server box is now a
+  high-value target. If it's compromised, every provisioned client account
+  goes with it. Lock it down.
+- **Bale account hygiene.** The operator must register dedicated throwaway
+  accounts for *both* roles — abnormal traffic looks abnormal and risks bans.
+- **Throughput.** The WebRTC/Meet carrier is built to beat the ~5–30 KB/s
+  chat ceiling; it is wired end-to-end but still beta, so expect rough edges
+  (reconnects, call-setup races).
 - **Code-signing.** Windows binaries are unsigned, so SmartScreen will warn
   on first run.
 
