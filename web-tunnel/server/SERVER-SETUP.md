@@ -157,22 +157,16 @@ All optional; defaults usually fine.
 pnpm -r test
 ```
 
-The suite covers: framing, handshake, mux, SOCKS5, chat transport over a mock
-Bale bus, LiveKit transport over a mock LiveKit bus, dashboard event stream,
-and the Bale server dispatcher with two concurrent mock clients.
+The suite covers: framing, handshake, mux, SOCKS5, LiveKit transport over a
+mock LiveKit bus, dashboard event stream, and the Bale Meet server dispatcher.
 
 ## Known limits of v1
 
 - **No approval inbox yet.** Anyone with the password completes the handshake
   and gets a tunnel. If you want per-client approval ("Alice wants in — allow?")
   that's a dashboard feature we haven't wired.
-- **Rate-limit risk.** Bale throttles accounts that send/receive too many
-  messages outside auth. ChatTransport messages are ~3/sec ceiling-ish; real
   throughput is 5–30 KB/s.
-- **No LiveKit mode in the server binary.** The WebRTC data-channel transport
-  is built and tested in shared/, but the aiobale glue to call
-  `bale.meet.v1.Meet/StartCall` + `Meet/GetWssURL` is still a TODO.
-- **No message acking / resend.** If Bale drops a chat message mid-stream the
-  tunnel stalls. Usually rare on private chats.
+- **Meet data permission.** Bale can allow media while denying LiveKit data
+  packets with `canPublishData=false`; the tunnel treats that as a hard failure.
 - **Wrong-PSK handshakes hang the client silently.** V2 will send
   `__WT_DENY__` so clients fail fast.

@@ -29,7 +29,7 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 820, height: 640,
     backgroundColor: '#0e0f12',
-    title: `Web Tunnel Server ${APP_VERSION_LABEL}`,
+    title: `NovaNet Server ${APP_VERSION_LABEL}`,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -63,6 +63,7 @@ ipcMain.handle('auth:sign-out', async (_e, account?: 'server' | 'client') => con
 ipcMain.handle('server:start', async (_e, password: string) => controller.startServer(password));
 ipcMain.handle('server:stop', async () => controller.stopServer());
 ipcMain.handle('client:create', async (_e, name: string) => controller.createClient(name));
+ipcMain.handle('client:delete', async (_e, id: string) => controller.deleteClient(id));
 ipcMain.handle('connection:terminate', async (_e, id: string, reason?: string) => controller.terminateConnection(id, reason));
 ipcMain.handle('user:reset', async (_e, peerKey: string) => controller.resetUser(peerKey));
 ipcMain.handle('logs:list', async () => controller.listLogs());

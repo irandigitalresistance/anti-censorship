@@ -36,6 +36,7 @@ import {
   type ClientLogSummary,
   type CrashRecord,
   type DashboardHandles,
+  type BaleServerCallEvent,
   type TunnelPeerSummary,
   type TunnelSnapshot,
   type UserStats,
@@ -78,6 +79,7 @@ export interface ServerStatus {
   logs: ClientLogSummary[];
   crashes: CrashRecord[];
   clientProfiles: ServerClientProfileStatus[];
+  incomingCalls: ServerIncomingCallStatus[];
   serverUuid: string | null;
   serverFingerprint: string | null;
   lastError: string | null;
@@ -113,6 +115,20 @@ export interface ServerClientProfileStatus {
   lastSeen: number | null;
   activeConnections: number;
   activeTunnelIds: string[];
+}
+
+export interface ServerIncomingCallStatus {
+  callId: string;
+  firstSeenAt: number;
+  updatedAt: number;
+  dateMs: number | null;
+  roomUuid: string | null;
+  baseUrl: string | null;
+  peer: TunnelPeerSummary | null;
+  source: 'push' | 'offer' | 'push+offer';
+  status: 'incoming' | 'offered' | 'accepting' | 'accepted' | 'connected' | 'closed' | 'failed' | 'expired';
+  tunnelId: string | null;
+  message: string | null;
 }
 
 export interface ServerConnectionStreamStatus {
@@ -183,6 +199,7 @@ export class ServerController extends EventEmitter {
    */
   private cachedUserStats: UserStats[] = [];
   private clientProfiles: StoredClientProfile[] = [];
+  private incomingCallHistory: ServerIncomingCallStatus[] = [];
   private readonly managedConnectionBytes = new Map<string, { up: number; down: number }>();
   private readonly client: BaleClient;
   private readonly configClient: BaleClient;
@@ -223,6 +240,7 @@ export class ServerController extends EventEmitter {
     users: [],
     logs: [],
     clientProfiles: [],
+    incomingCalls: [],
     serverUuid: null,
     serverFingerprint: null,
     lastError: null,
@@ -383,11 +401,11 @@ export class ServerController extends EventEmitter {
   }
 
   async sendPhoneCode(phone: string, account: AccountKind = 'server'): Promise<void> {
-    console.log(`[controller] sendPhoneCode account=${account} phone=${phone}`);
+    console.log(`[controller] sendPhoneCode account=${account}`);
     this.patchAccount(account, { lastError: null });
     try {
       const resp = await this.baleClientFor(account).startPhoneAuth(phone);
-      console.log(`[controller] startPhoneAuth OK transactionHash=${resp.transactionHash.slice(0, 16)}…`);
+      console.log('[controller] startPhoneAuth OK');
       this.setPendingTransaction(account, resp.transactionHash);
       this.patchAccount(account, {
         pendingPhone: phone,
@@ -513,6 +531,7 @@ export class ServerController extends EventEmitter {
       logs: [],
       crashes: [],
       clientProfiles,
+      incomingCalls: this.status.incomingCalls,
       serverUuid: this.status.serverUuid,
       serverFingerprint: this.status.serverFingerprint,
       uploadEndpoint: this.status.uploadEndpoint ?? null,
@@ -541,6 +560,8 @@ export class ServerController extends EventEmitter {
     }
     const psk = deriveKeyFromPassword(password, new TextEncoder().encode(PSK_SALT_INFO));
     console.log(`[controller] psk derived (${psk.byteLength} bytes)`);
+    this.incomingCallHistory = [];
+    this.status.incomingCalls = [];
     const manager = new TunnelManager();
     manager.loadLifetime({ up: this.status.lifetimeBytesUp, down: this.status.lifetimeBytesDown });
     manager.loadUserStats(this.cachedUserStats);
@@ -634,6 +655,7 @@ export class ServerController extends EventEmitter {
       identity: this.serverIdentity ?? undefined,
       onClientMetadata: (metadata, tunnelId) => this.handleClientMetadata(metadata, tunnelId),
       onLogReport,
+      onCallEvent: (event) => this.recordIncomingCallEvent(event),
       ...(mode === 'mock'
         ? {}
         : {
@@ -840,6 +862,113 @@ export class ServerController extends EventEmitter {
     this.status.clientProfiles = this.buildClientProfileStatus(this.manager?.snapshot() ?? []);
     this.emitStatus();
     return this.status.clientProfiles.find((client) => client.id === id)!;
+  }
+
+  async deleteClient(id: string): Promise<void> {
+    const trimmed = id.trim();
+    if (!trimmed) throw new Error('client id is required');
+    const idx = this.clientProfiles.findIndex((client) => client.id === trimmed);
+    if (idx < 0) throw new Error(`client config not found: ${trimmed}`);
+
+    const active = this.manager?.snapshot().filter((tunnel) => tunnel.clientId === trimmed) ?? [];
+    this.clientProfiles.splice(idx, 1);
+    for (const tunnel of active) {
+      this.managedConnectionBytes.delete(tunnel.id);
+      if (!this.manager || !tunnel.terminable) continue;
+      await this.manager.terminateTunnel(tunnel.id, 'client config removed').catch(() => false);
+    }
+
+    this.persistClientProfiles();
+    const snapshot = this.manager?.snapshot() ?? [];
+    this.status.clientProfiles = this.buildClientProfileStatus(snapshot);
+    this.emitStatus();
+  }
+
+  private recordIncomingCallEvent(event: BaleServerCallEvent): void {
+    const callId = String(event.callId);
+    const now = event.atMs || Date.now();
+    const existing = this.incomingCallHistory.find((call) => call.callId === callId) ?? null;
+    const peer = event.peer
+      ? this.withResolvedPeer({
+          chatId: event.peer.chatId,
+          chatType: event.peer.chatType,
+          name: null,
+          username: null,
+        })
+      : existing?.peer ?? null;
+    const next: ServerIncomingCallStatus = {
+      callId,
+      firstSeenAt: existing?.firstSeenAt ?? now,
+      updatedAt: now,
+      dateMs: event.dateMs ?? existing?.dateMs ?? null,
+      roomUuid: event.roomUuid ?? existing?.roomUuid ?? null,
+      baseUrl: event.baseUrl ?? existing?.baseUrl ?? null,
+      peer,
+      source: mergeCallSource(existing?.source ?? null, event.kind),
+      status: incomingCallStatusForEvent(event.kind, existing?.status ?? null),
+      tunnelId: event.tunnelId ?? existing?.tunnelId ?? null,
+      message: event.reason ?? incomingCallMessageForEvent(event.kind),
+    };
+    this.incomingCallHistory = [
+      next,
+      ...this.incomingCallHistory.filter((call) => call.callId !== callId),
+    ]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 200);
+    this.status.incomingCalls = this.incomingCallHistory;
+    if (peer) this.queueIncomingCallPeerLookup(peer);
+    this.emitStatus();
+  }
+
+  private queueIncomingCallPeerLookup(peer: TunnelPeerSummary): void {
+    const key = peerKey(peer);
+    if (peer.name || peer.username || this.peerLookupCache.has(key) || this.pendingPeerLookups.has(key)) {
+      this.refreshIncomingCallPeerNames();
+      return;
+    }
+    if (peer.chatType !== 'PRIVATE' && peer.chatType !== 'BOT') return;
+    const now = Date.now();
+    const lastAttempt = this.peerLookupLastAttempt.get(key) ?? 0;
+    if (now - lastAttempt < 30_000) return;
+    this.pendingPeerLookups.add(key);
+    this.peerLookupLastAttempt.set(key, now);
+
+    void (async () => {
+      try {
+        const [user] = await this.client.loadUsers([{
+          id: BigInt(peer.chatId),
+          type: toBaleChatType(peer.chatType),
+        }]);
+        this.peerLookupCache.set(key, {
+          name: user?.name ?? null,
+          username: user?.username ?? null,
+        });
+        this.refreshIncomingCallPeerNames();
+        this.emitStatus();
+      } catch (e) {
+        console.warn('[controller] incoming-call loadUsers failed:', (e as Error).message);
+      } finally {
+        this.pendingPeerLookups.delete(key);
+      }
+    })();
+  }
+
+  private refreshIncomingCallPeerNames(): void {
+    let changed = false;
+    this.incomingCallHistory = this.incomingCallHistory.map((call) => {
+      if (!call.peer) return call;
+      const resolved = this.withResolvedPeer(call.peer);
+      if (!resolved) return call;
+      if (
+        resolved === call.peer ||
+        (resolved.name === call.peer.name && resolved.username === call.peer.username)
+      ) {
+        return call;
+      }
+      changed = true;
+      return { ...call, peer: resolved };
+    });
+    if (changed) this.status.incomingCalls = this.incomingCallHistory;
   }
 
   private handleClientMetadata(metadata: V2ClientMetadata | null, tunnelId: string | null): void {
@@ -1157,6 +1286,7 @@ export class ServerController extends EventEmitter {
             });
           }
         }
+        this.refreshIncomingCallPeerNames();
         this.refreshConnectionDetails();
         this.emitStatus();
       } catch (e) {
@@ -1287,6 +1417,74 @@ function formatPeerLabel(peer: TunnelPeerSummary): string {
     return `${peer.chatType} ${peer.chatId} • @${peer.username.trim()}`;
   }
   return `${peer.chatType} ${peer.chatId}`;
+}
+
+function mergeCallSource(
+  existing: ServerIncomingCallStatus['source'] | null,
+  kind: BaleServerCallEvent['kind'],
+): ServerIncomingCallStatus['source'] {
+  const next = kind === 'incoming-push' ? 'push'
+    : kind === 'meet-offer' ? 'offer'
+    : null;
+  if (!next) return existing ?? 'push';
+  if (!existing || existing === next) return next;
+  return 'push+offer';
+}
+
+function incomingCallStatusForEvent(
+  kind: BaleServerCallEvent['kind'],
+  existing: ServerIncomingCallStatus['status'] | null,
+): ServerIncomingCallStatus['status'] {
+  switch (kind) {
+    case 'incoming-push':
+      return existing === 'offered' ? 'offered' : 'incoming';
+    case 'meet-offer':
+      return existing === 'accepting' || existing === 'accepted' || existing === 'connected'
+        ? existing
+        : 'offered';
+    case 'accepting':
+      return 'accepting';
+    case 'accepted':
+      return 'accepted';
+    case 'livekit-connected':
+    case 'handshake-ok':
+      return 'connected';
+    case 'closed':
+      return 'closed';
+    case 'failed':
+      return 'failed';
+    case 'expired':
+      return existing === 'accepted' || existing === 'connected' || existing === 'closed'
+        ? existing
+        : 'expired';
+    default:
+      return existing ?? 'incoming';
+  }
+}
+
+function incomingCallMessageForEvent(kind: BaleServerCallEvent['kind']): string | null {
+  switch (kind) {
+    case 'incoming-push':
+      return 'incoming-call push received';
+    case 'meet-offer':
+      return 'meet offer received';
+    case 'accepting':
+      return 'accepting call';
+    case 'accepted':
+      return 'Bale call accepted';
+    case 'livekit-connected':
+      return 'LiveKit room connected';
+    case 'handshake-ok':
+      return 'tunnel handshake completed';
+    case 'closed':
+      return 'call closed';
+    case 'expired':
+      return 'call expired';
+    case 'failed':
+      return 'call failed';
+    default:
+      return null;
+  }
 }
 
 function toBaleChatType(chatType: string): BaleChatType | undefined {

@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('wt', {
   startServer: (password) => ipcRenderer.invoke('server:start', password),
   stopServer: () => ipcRenderer.invoke('server:stop'),
   createClient: (name) => ipcRenderer.invoke('client:create', name),
+  deleteClient: (id) => ipcRenderer.invoke('client:delete', id),
   terminateConnection: (id, reason) => ipcRenderer.invoke('connection:terminate', id, reason),
   resetUser: (peerKey) => ipcRenderer.invoke('user:reset', peerKey),
   listLogs: () => ipcRenderer.invoke('logs:list'),

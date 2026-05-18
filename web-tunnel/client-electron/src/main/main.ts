@@ -39,12 +39,16 @@ function createWindow(): void {
   const rendererIndex = app.isPackaged
     ? path.join(app.getAppPath(), 'src', 'renderer', 'index.html')
     : path.resolve(__dirname, '../../src/renderer/index.html');
+  const windowIcon = app.isPackaged
+    ? path.join(app.getAppPath(), 'build', 'icon.png')
+    : path.resolve(__dirname, '../../build/icon.png');
 
   mainWindow = new BrowserWindow({
     width: 820,
     height: 680,
     backgroundColor: '#0e0f12',
-    title: `Web Tunnel ${APP_VERSION_LABEL}`,
+    icon: windowIcon,
+    title: `NovaNet ${APP_VERSION_LABEL}`,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,

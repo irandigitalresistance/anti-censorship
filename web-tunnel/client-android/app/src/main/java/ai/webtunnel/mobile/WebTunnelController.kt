@@ -119,7 +119,7 @@ data class ControllerState(
 private data class TunnelRuntime(
   val callId: Long,
   val room: io.livekit.android.room.Room,
-  val transport: LiveKitTransport,
+  val transport: Transport,
   val mux: TunnelMuxV2,
   val socksServer: Socks5Server,
   val meetRepeatsJob: Job?,
@@ -395,7 +395,7 @@ class WebTunnelController(
     logLine("starting WebRTC tunnel to ${effectiveSelected.label} on SOCKS $socksPort")
 
     var room: io.livekit.android.room.Room? = null
-    var transport: LiveKitTransport? = null
+    var transport: Transport? = null
     var socks: Socks5Server? = null
     var meetRepeatsJob: Job? = null
     var callId: Long? = null
@@ -419,6 +419,7 @@ class WebTunnelController(
       pushConnectingEvent("Connecting to LiveKit room...")
       room = connectLiveKitRoom(appContext, baleClient.liveKitUrlFor(call))
       logLine("LiveKit connect OK local=${room.localParticipant.identity?.value ?: "unknown"}")
+      logLine("LiveKit permissions ${formatLiveKitPermissions(room)}")
       ensureStartNotCancelled()
       val peerIdentity = awaitRemoteParticipant(
         room,
@@ -426,7 +427,18 @@ class WebTunnelController(
       )
       if (peerIdentity != null) logLine("LiveKit peer connected identity=$peerIdentity")
       else logLine("LiveKit peer not visible yet; continuing without identity lock")
-      transport = LiveKitTransport(room = room, scope = scope, peerIdentity = peerIdentity)
+      transport = if (isLiveKitDataDisabled(room)) {
+        pushConnectingEvent("LiveKit data disabled; using media-video carrier...")
+        logLine("using media-video packet carrier identity=${room.localParticipant.identity?.value ?: "unknown"}")
+        MediaVideoTransport.create(
+          room = room,
+          scope = scope,
+          peerIdentity = peerIdentity,
+          onLog = { line -> logLine(line) },
+        )
+      } else {
+        LiveKitTransport(room = room, scope = scope, peerIdentity = peerIdentity)
+      }
       pushConnectingEvent("Transport ready, starting v2 handshake...")
       val run = try {
         withTimeout(V2_HANDSHAKE_TIMEOUT_MS) {
@@ -589,6 +601,8 @@ class WebTunnelController(
           "Import a client config first"
         detail.contains("CONFIG_UNKNOWN_CLIENT") ->
           "This client config is not registered on the server"
+        detail.contains("BALE_LIVEKIT_DATA_DISABLED") ->
+          "Bale Meet is blocking LiveKit data packets for this account"
         detail.startsWith("MUX_CLOSED_DURING_START:") -> "tunnel closed before startup completed"
         detail.contains("SERVER_KEY_MISMATCH") ->
           "Server identity changed — use Reset pins to reconnect to a reinstalled server"
@@ -808,6 +822,7 @@ class WebTunnelController(
       "SERVER_KEY_MISMATCH",
       "CONFIG_UNKNOWN_CLIENT",
       "CONFIG_REQUIRED",
+      "BALE_LIVEKIT_DATA_DISABLED",
       "not authenticated",
       "import a client config",
     )
@@ -818,7 +833,7 @@ class WebTunnelController(
     TunnelVpnBridge.start(
       appContext,
       TunnelVpnConfig(
-        sessionLabel = "Web Tunnel ${tunnel.serverLabel}",
+        sessionLabel = "NovaNet ${tunnel.serverLabel}",
         socksPort = tunnel.socksPort,
       ),
     )
@@ -849,10 +864,6 @@ class WebTunnelController(
     }
     val latencyMs = if (rtts.isEmpty()) -1L else rtts.sum() / rtts.size
 
-    val CHUNK = 4096
-    val UPLOAD_BYTES = 512 * 1024
-    val chunk = ByteArray(CHUNK)
-
     val stream = mux.openStream(OpenAddress(kind = "domain", host = "wt-speedtest", port = 80))
     val downloadBytes = AtomicInteger(0)
     val downloadDone = CompletableDeferred<Long>()
@@ -869,19 +880,15 @@ class WebTunnelController(
       }
     }
 
-    val uploadStart = System.currentTimeMillis()
-    var sent = 0
-    while (sent < UPLOAD_BYTES) {
-      val toSend = minOf(CHUNK, UPLOAD_BYTES - sent)
-      stream.write(chunk.copyOf(toSend))
-      sent += toSend
-    }
-    val uploadMs = System.currentTimeMillis() - uploadStart
+    // The media carrier is internally queued, so a local write loop only
+    // measures enqueue speed. Send a tiny trigger and measure real download
+    // delivery instead of flooding the tunnel with a misleading upload test.
+    stream.write(byteArrayOf(0x01, 0x02, 0x03, 0x04))
 
-    val downloadMs = withTimeout(15_000) { downloadDone.await() }
+    val downloadMs = withTimeout(20_000) { downloadDone.await() }
     val totalDown = downloadBytes.get()
 
-    val uploadKbps = if (uploadMs > 0) ((sent.toLong() * 8L) / uploadMs).toInt() else 0
+    val uploadKbps = -1
     val downloadKbps = if (downloadMs > 0) ((totalDown.toLong() * 8L) / downloadMs).toInt() else 0
 
     return SpeedTestResult(latencyMs = latencyMs, uploadKbps = uploadKbps, downloadKbps = downloadKbps)
@@ -1070,3 +1077,13 @@ class WebTunnelController(
     }
   }
 }
+
+private fun formatLiveKitPermissions(room: Room): String {
+  val permissions = room.localParticipant.permissions
+  return "canPublish=${permissions?.canPublish ?: "unknown"} " +
+    "canPublishData=${permissions?.canPublishData ?: "unknown"} " +
+    "canSubscribe=${permissions?.canSubscribe ?: "unknown"}"
+}
+
+private fun isLiveKitDataDisabled(room: Room): Boolean =
+  room.localParticipant.permissions?.canPublishData == false

@@ -76,7 +76,6 @@ export {
   type EncodeV2PacketOptions,
 } from './protocol-v2.js';
 export type { ChatType, Peer, IncomingMessage, ISidecar, SidecarMessageListener } from './sidecar.js';
-export { makeChatTransport, type ChatTransportOptions } from './chat-transport.js';
 export { MockBalBus, MockSidecar } from './mock-sidecar.js';
 export { makeLivekitTransport, type LivekitRoomLike, type LivekitTransportOptions } from './livekit-transport.js';
 export { MockLivekitBus, MockLivekitRoom } from './mock-livekit.js';
@@ -110,7 +109,13 @@ export {
 export { GrpcError, parseGrpcWebBody } from './bale/grpc-web.js';
 export { NativeBaleSidecar, type NativeSidecarOptions } from './bale/native-sidecar.js';
 export { PeerType as BalePeerType, ChatType as BaleChatType } from './bale/messages.js';
-export { makeBaleMeetFactory, connectLivekitRoom, type BaleMeetFactoryOptions } from './bale/meet-factory.js';
+export {
+  makeBaleMeetFactory,
+  connectLivekitRoom,
+  isLivekitDataDisabledError,
+  LIVEKIT_DATA_DISABLED_CODE,
+  type BaleMeetFactoryOptions,
+} from './bale/meet-factory.js';
 export {
   BaleIncomingCallWatcher,
   decodeIncomingCallEvent,

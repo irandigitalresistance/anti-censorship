@@ -44,7 +44,7 @@ async def cmd_send_code(phone: str, session: str) -> int:
     try:
         phone_int = int(phone.replace("+", "").strip())
     except ValueError:
-        print(f"invalid phone {phone!r}", file=sys.stderr)
+        print("invalid phone", file=sys.stderr)
         return 2
     resp = await client.start_phone_auth(
         phone_number=phone_int, code_type=SendCodeType.DEFAULT
@@ -52,13 +52,8 @@ async def cmd_send_code(phone: str, session: str) -> int:
     if isinstance(resp, AuthErrors):
         print(f"start_phone_auth failed: {resp!r}", file=sys.stderr)
         return 3
-    _state_write(
-        {"transaction_hash": resp.transaction_hash, "phone": phone_int}
-    )
-    print(
-        f"OTP dispatched to {phone_int}. Transaction hash saved to "
-        f"{STATE_FILE}."
-    )
+    _state_write({"transaction_hash": resp.transaction_hash})
+    print(f"OTP dispatched. Transaction hash saved to {STATE_FILE}.")
     print(
         f"Next: python -m bale_sidecar.step_login verify-code <OTP> --session {session}"
     )

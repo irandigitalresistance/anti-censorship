@@ -13,8 +13,8 @@ android {
     applicationId = "ai.webtunnel.mobile"
     minSdk = 26
     targetSdk = 35
-    versionCode = 400
-    versionName = "0.4.0-beta"
+    versionCode = 402
+    versionName = "0.4.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -45,7 +45,7 @@ android {
 
   applicationVariants.all {
     val variant = this
-    val versioned = "WebTunnel-Client-Android-v${variant.versionName}.apk"
+    val versioned = "NovaNet-Android-v${variant.versionName}.apk"
     variant.outputs.all {
       val out = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
       out.outputFileName = versioned
@@ -55,7 +55,7 @@ android {
 
 tasks.register<Copy>("copyApkToRelease") {
   val variant = "release"
-  val name = "WebTunnel-Client-Android-v${android.defaultConfig.versionName}.apk"
+  val name = "NovaNet-Android-v${android.defaultConfig.versionName}.apk"
   from("$buildDir/outputs/apk/$variant/$name")
   into(rootProject.file("../release"))
 }
@@ -66,7 +66,7 @@ afterEvaluate {
   }
   tasks.named("assembleDebug").configure {
     doLast {
-      val name = "WebTunnel-Client-Android-v${android.defaultConfig.versionName}.apk"
+      val name = "NovaNet-Android-v${android.defaultConfig.versionName}.apk"
       val src = file("$buildDir/outputs/apk/debug/$name")
       if (src.exists()) {
         val destDir = rootProject.file("../release")

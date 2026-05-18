@@ -9,8 +9,8 @@ import { ListLoadMode, PeerType } from './messages.js';
  * peer we're actively tunneling with — a deliberate v1 simplification.
  *
  * Streaming (WebSocket-RPC) would deliver real-time updates; building it is
- * Session 2 work. For now, the polling loop is configurable so the dispatcher
- * / chat transport can trade latency for Bale rate-limit pressure.
+ * Session 2 work. For now, the polling loop is configurable so Meet offer
+ * signaling can trade latency for Bale rate-limit pressure.
  */
 export interface NativeSidecarOptions {
   client: BaleClient;

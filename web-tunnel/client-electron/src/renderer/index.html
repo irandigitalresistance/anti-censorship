@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
-    <title>Web Tunnel v0.4.0-beta</title>
+    <title>NovaNet v0.4.2</title>
     <style>
       :root {
         --bg: #0e0f12;
@@ -86,7 +86,7 @@
   </head>
   <body>
     <header>
-      <h1>web-tunnel v0.4.0-beta</h1>
+      <h1>NovaNet v0.4.2</h1>
       <div id="me" class="me">not logged in</div>
       <button id="open-log" class="btn" title="open debug log">Open log</button>
       <button id="send-logs" class="btn" title="upload recent logs to server">Send logs</button>
@@ -217,6 +217,7 @@
         return Math.floor(s / 3600) + 'h' + Math.floor((s % 3600) / 60) + 'm';
       }
       function fmtKbps(kbps) {
+        if (kbps < 0) return 'n/a';
         if (kbps < 1000) return kbps + ' KB/s';
         return (kbps / 1024).toFixed(1) + ' MB/s';
       }

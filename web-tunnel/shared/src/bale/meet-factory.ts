@@ -1,7 +1,14 @@
 import type { LivekitConnectContext, LivekitRoomFactory } from '../livekit-factory.js';
 import type { LivekitRoomLike } from '../livekit-transport.js';
 import type { BaleClient } from './client.js';
+import { makeRtcNodeVideoPacketCarrier, type RtcNodeVideoPacketCarrier } from './media-video-carrier.js';
 import { buildLiveKitUrl, type Peer, type StartCallResult } from './messages.js';
+
+export const LIVEKIT_DATA_DISABLED_CODE = 'BALE_LIVEKIT_DATA_DISABLED';
+
+export function isLivekitDataDisabledError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(LIVEKIT_DATA_DISABLED_CODE);
+}
 
 /**
  * Build a `LivekitRoomFactory` that rides Bale's own LiveKit SFU. This is the
@@ -77,7 +84,15 @@ export function makeBaleMeetFactory(opts: BaleMeetFactoryOptions): LivekitRoomFa
       );
     }
     const url = buildLiveKitUrl(call);
-    const room = await connectLivekitRoom(url, ctx);
+    let room: LivekitRoomLike;
+    try {
+      room = await connectLivekitRoom(url, ctx);
+    } catch (e) {
+      if (ctx.side === 'client') {
+        try { await opts.client.discardCall(call.callId); } catch { /* best-effort */ }
+      }
+      throw e;
+    }
     // Wrap the teardown so hanging up also tells Bale the call is over.
     const origDisconnect = room.disconnect.bind(room);
     return {
@@ -128,13 +143,15 @@ export async function connectLivekitRoom(url: string, ctx: LivekitConnectContext
   // at compile time in packages that opt not to bundle either SDK.
   const RTC_NODE = '@livekit/rtc-node';
   const LK_CLIENT = 'livekit-client';
-  // Detect a Node.js / Electron main-process runtime: navigator is undefined.
+  // Detect a Node.js / Electron main-process runtime. Newer Node versions
+  // expose a `navigator`, so key off `process.versions.node` plus no `window`.
   // In that environment livekit-client (browser SDK) cannot work, so we MUST
   // use @livekit/rtc-node — and we want a loud, actionable error if it's not
   // installed instead of silently falling through to livekit-client and
   // exploding deep inside its `isReactNative()` helper.
   const isMainProcess = typeof globalThis !== 'undefined'
-    && typeof (globalThis as { navigator?: unknown }).navigator === 'undefined';
+    && typeof (globalThis as { process?: { versions?: { node?: string } } }).process?.versions?.node === 'string'
+    && typeof (globalThis as { window?: unknown }).window === 'undefined';
   let sdk: any = null;
   let sdkKind: 'node' | 'client' | null = null;
   if (isMainProcess) {
@@ -166,6 +183,24 @@ export async function connectLivekitRoom(url: string, ctx: LivekitConnectContext
 
   const room = new sdk.Room();
   await room.connect(serverUrl, token, { autoSubscribe: true });
+  const permission = logLivekitPermissionSnapshot(room, ctx);
+  let mediaCarrier: RtcNodeVideoPacketCarrier | null = null;
+  if (permission.canPublishData === false) {
+    if (sdkKind !== 'node') {
+      try { await room.disconnect(); } catch { /* ignore */ }
+      throw new Error(
+        `${LIVEKIT_DATA_DISABLED_CODE}: Bale LiveKit joined side=${ctx.side} ` +
+        `identity=${permission.identity}, but canPublishData=false. ` +
+        `Bale Meet permits media tracks, but this runtime cannot publish a media-backed tunnel.`,
+      );
+    }
+    // Bale still allows media publishing (`canPublish=true`). Use a synthetic
+    // video track as the byte carrier when LiveKit's data-packet permission is
+    // explicitly disabled.
+    mediaCarrier = await makeRtcNodeVideoPacketCarrier(sdk, room, ctx);
+    // eslint-disable-next-line no-console
+    console.log(`[livekit] using media-video packet carrier side=${ctx.side} identity=${permission.identity}`);
+  }
 
   const dataHandlers = new Set<(bytes: Uint8Array, fromIdentity: string) => void>();
   const discHandlers = new Set<(reason: string) => void>();
@@ -196,12 +231,17 @@ export async function connectLivekitRoom(url: string, ctx: LivekitConnectContext
   const surface: LivekitRoomLike = {
     localIdentity: room.localParticipant.identity ?? ctx.identity,
     async publishData(bytes: Uint8Array, opts?: { reliable?: boolean; destinationIdentities?: string[] }) {
+      if (mediaCarrier) {
+        await mediaCarrier.send(bytes);
+        return;
+      }
       await room.localParticipant.publishData(bytes, {
         reliable: opts?.reliable ?? true,
         destinationIdentities: opts?.destinationIdentities ?? [],
       });
     },
     onDataReceived(cb: (bytes: Uint8Array, fromIdentity: string) => void) {
+      if (mediaCarrier) return mediaCarrier.onMessage(cb);
       dataHandlers.add(cb);
       return () => dataHandlers.delete(cb);
     },
@@ -209,7 +249,43 @@ export async function connectLivekitRoom(url: string, ctx: LivekitConnectContext
       discHandlers.add(cb);
       return () => discHandlers.delete(cb);
     },
-    async disconnect() { await room.disconnect(); },
+    async disconnect() {
+      await mediaCarrier?.close();
+      await room.disconnect();
+    },
   };
   return surface;
+}
+
+interface LivekitPermissionSnapshot {
+  identity: string;
+  canPublish: boolean | null;
+  canPublishData: boolean | null;
+  canSubscribe: boolean | null;
+}
+
+function readBoolean(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function logLivekitPermissionSnapshot(room: any, ctx: LivekitConnectContext): LivekitPermissionSnapshot {
+  const localParticipant = room?.localParticipant;
+  const permission = localParticipant?.permissions ?? localParticipant?.info?.permission;
+  const identity = localParticipant?.identity ?? localParticipant?.info?.identity ?? ctx.identity;
+  const snapshot = {
+    identity,
+    canPublish: readBoolean(permission?.canPublish),
+    canPublishData: readBoolean(permission?.canPublishData),
+    canSubscribe: readBoolean(permission?.canSubscribe),
+  };
+  // Keep this visible in logs so future SDK changes are diagnosed from the
+  // connected-room state, not just the JWT.
+  // eslint-disable-next-line no-console
+  console.log(
+    `[livekit] connected side=${ctx.side} identity=${identity} ` +
+    `canPublish=${snapshot.canPublish ?? 'unknown'} ` +
+    `canPublishData=${snapshot.canPublishData ?? 'unknown'} ` +
+    `canSubscribe=${snapshot.canSubscribe ?? 'unknown'}`,
+  );
+  return snapshot;
 }

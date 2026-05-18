@@ -1,5 +1,5 @@
 appId: ai.anthropic.webtunnel.server
-productName: Web Tunnel Server
+productName: NovaNet Server
 directories:
   output: ../release
 files:
@@ -23,14 +23,14 @@ win:
     - target: portable
       arch:
         - x64
-  artifactName: "WebTunnel-Server-0.4.0-beta.${ext}"
+  artifactName: "NovaNet-Server-0.4.2.${ext}"
   signAndEditExecutable: false
 mac:
   target:
     - target: zip
       arch:
         - x64
-  artifactName: "WebTunnel-Server-mac.${ext}"
+  artifactName: "NovaNet-Server-mac.${ext}"
   identity: null
 portable:
-  artifactName: "WebTunnel-Server-0.4.0-beta.${ext}"
+  artifactName: "NovaNet-Server-0.4.2.${ext}"

@@ -1,7 +1,5 @@
 import {
   BalePeerType,
-  buildFrameMessage,
-  buildFrameMessageV2,
   makeLivekitTransport,
   parseMagic,
   type V2LogReport,
@@ -13,23 +11,36 @@ import {
   type LivekitRoomFactory,
   type Peer,
   type StartCallResult,
-  type Transport,
   type V2ClientMetadata,
 } from '@webtunnel/shared';
 import { runServerTunnel, runServerTunnelV2 } from '../tunnel.js';
 import type { TunnelHandle, TunnelManager, TunnelPeerSummary } from '../dashboard/manager.js';
 
-interface PerPeerTunnel {
-  transport: PassiveTransport;
-  startedAt: number;
-  closed: boolean;
-  sessionTag: string | null;
-  seenFrameKeys: string[];
-  seenFrames: Set<string>;
-}
-
 /** Maps meetKey(callId) -> tunnel metadata so we can update peer after late meet-offer arrives */
 type MeetTunnelEntry = { tunnelId: string; effectivePeer: Peer | null; displayPeer: Peer };
+
+export type BaleServerCallEventKind =
+  | 'incoming-push'
+  | 'meet-offer'
+  | 'accepting'
+  | 'accepted'
+  | 'livekit-connected'
+  | 'handshake-ok'
+  | 'closed'
+  | 'failed'
+  | 'expired';
+
+export interface BaleServerCallEvent {
+  kind: BaleServerCallEventKind;
+  callId: bigint;
+  atMs: number;
+  peer?: Peer | null;
+  roomUuid?: string | null;
+  baseUrl?: string | null;
+  dateMs?: number | null;
+  tunnelId?: string | null;
+  reason?: string | null;
+}
 
 export interface BaleServerDispatcherOptions {
   logger?: (line: string) => void;
@@ -38,29 +49,20 @@ export interface BaleServerDispatcherOptions {
   livekitFactory?: LivekitRoomFactory;
   incomingCallSource?: IncomingCallSource;
   restartIncomingCalls?: () => Promise<void>;
-  zeroTransferTimeoutMs?: number;
   meetZeroTransferTimeoutMs?: number;
   protocolVersion?: 1 | 2;
   identity?: V2ServerIdentity;
   onClientMetadata?: (metadata: V2ClientMetadata | null, tunnelId: string | null) => void | Promise<void>;
   onLogReport?: (report: V2LogReport, tunnelId: string | null) => void;
-  /** Label prefix for chat-carried tunnels in dashboards/logs. Defaults to `bale`. */
-  chatCarrierLabel?: string;
-  /** Minimum spacing between outbound chat carrier messages. Defaults to no pacing. */
-  chatSendIntervalMs?: number;
-  /** Disable v2 mux heartbeat for slow chat carriers. */
-  chatDisableHeartbeat?: boolean;
+  onCallEvent?: (event: BaleServerCallEvent) => void;
 }
 
 /**
- * Dispatches incoming Bale chat messages to a per-peer `Transport`. For each
- * new private-chat peer that sends us a `__WT_FRAME__` message, we spin up a
- * fresh server-side tunnel (handshake + mux + egress). Anyone who knows the
- * PSK can complete the handshake; anyone who doesn't gets a decrypt failure
- * and the tunnel tears down.
+ * Dispatches Bale Meet call offers to server-side tunnels. Bale chat messages
+ * are used only as lightweight Meet call signals (`__WT_MEET__...`); tunnel
+ * data itself must travel through the LiveKit Meet data carrier.
  */
 export class BaleServerDispatcher {
-  private static readonly DEFAULT_ZERO_TRANSFER_TIMEOUT_MS = 60_000;
   // WebRTC tunnels have transport-level pong keepalive (~5 min), so a
   // byte-idle timeout shorter than that kills healthy but idle VPN sessions.
   /**
@@ -79,7 +81,6 @@ export class BaleServerDispatcher {
    */
   private static readonly HANDSHAKE_HARD_TIMEOUT_MS = 15_000;
   private static readonly RECENT_MEET_CALL_TTL_MS = 120_000;
-  private readonly tunnels = new Map<string, PerPeerTunnel>();
   private readonly activeMeetCalls = new Set<string>();
   private readonly activeMeetTunnels = new Map<string, MeetTunnelEntry>();
   private readonly pendingMeetOffers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -98,9 +99,8 @@ export class BaleServerDispatcher {
       allowChatTypes?: ReadonlyArray<Peer['chatType']>;
       /**
        * Optional: BaleClient for the server's own account. If set, the
-       * dispatcher can handle `__WT_MEET__<callId>` chat offers by calling
-       * `client.acceptCall(callId)` and spinning up a webrtc-carried tunnel
-       * in parallel with any chat-carried tunnels.
+       * dispatcher can handle `__WT_MEET__<callId>` offers by calling
+       * `client.acceptCall(callId)` and spinning up a Meet-carried tunnel.
        */
       baleClient?: BaleClient;
       /**
@@ -113,10 +113,8 @@ export class BaleServerDispatcher {
       incomingCallSource?: IncomingCallSource;
       /** Optional hook to refresh the Bale incoming-call watcher before fallback accept. */
       restartIncomingCalls?: () => Promise<void>;
-      /** Auto-close chat (Bale message) tunnels that transfer zero bytes for this many ms. */
-      zeroTransferTimeoutMs?: number;
       /** Auto-close WebRTC meet tunnels that transfer zero bytes for this many ms. Defaults
-       *  to 5 minutes — longer than chat because WebRTC provides its own pong keepalive. */
+       *  to 5 minutes because WebRTC provides its own pong keepalive. */
       meetZeroTransferTimeoutMs?: number;
       /** Protocol version for tunnel data-path. Defaults to 1 for compatibility. */
       protocolVersion?: 1 | 2;
@@ -126,12 +124,8 @@ export class BaleServerDispatcher {
       onClientMetadata?: (metadata: V2ClientMetadata | null, tunnelId: string | null) => void | Promise<void>;
       /** Optional server callback for client-uploaded logs. */
       onLogReport?: (report: V2LogReport, tunnelId: string | null) => void;
-      /** Label prefix for chat-carried tunnels in dashboards/logs. Defaults to `bale`. */
-      chatCarrierLabel?: string;
-      /** Minimum spacing between outbound chat carrier messages. Defaults to no pacing. */
-      chatSendIntervalMs?: number;
-      /** Disable v2 mux heartbeat for slow chat carriers. */
-      chatDisableHeartbeat?: boolean;
+      /** Optional realtime call-attempt audit stream for dashboards. */
+      onCallEvent?: (event: BaleServerCallEvent) => void;
     } = {},
   ) {}
 
@@ -154,11 +148,25 @@ export class BaleServerDispatcher {
     });
     this.offIncomingCall = this.opts.incomingCallSource?.onIncomingCall((event) => {
       const offeredPeer = this.meetOfferPeers.get(this.meetKey(event.callId)) ?? null;
+      this.emitCallEvent({
+        kind: 'incoming-push',
+        callId: event.callId,
+        peer: offeredPeer,
+        roomUuid: event.roomUuid,
+        baseUrl: event.baseUrl,
+        dateMs: event.dateMs,
+      });
       this.log(
         `incoming-call push: callId=${event.callId} room=${event.roomUuid || '-'} ` +
         `base=${event.baseUrl || '-'} date=${event.dateMs ?? 'n/a'}`,
       );
       if (this.isStaleTimestamp(event.dateMs)) {
+        this.emitCallEvent({
+          kind: 'expired',
+          callId: event.callId,
+          peer: offeredPeer,
+          reason: 'stale incoming-call push',
+        });
         this.log(`ignored stale incoming-call push callId=${event.callId}`);
         return;
       }
@@ -181,17 +189,17 @@ export class BaleServerDispatcher {
     this.pendingMeetOffers.clear();
     this.meetOfferPeers.clear();
     this.recentlyFinishedMeetCalls.clear();
-    for (const [key, pt] of this.tunnels) {
-      if (!pt.closed) {
-        pt.closed = true;
-        pt.transport.fireClose('dispatcher stopped');
-      }
-      this.tunnels.delete(key);
-    }
   }
 
   private log(line: string): void {
     this.opts.logger?.(line);
+  }
+
+  private emitCallEvent(event: Omit<BaleServerCallEvent, 'atMs'> & { atMs?: number }): void {
+    this.opts.onCallEvent?.({
+      atMs: event.atMs ?? Date.now(),
+      ...event,
+    });
   }
 
   private protocolVersion(): 1 | 2 {
@@ -209,16 +217,28 @@ export class BaleServerDispatcher {
     const peer: Peer = { chatId: msg.chat.chatId, chatType: msg.chat.chatType };
     let key = this.keyFor(peer, parsed.kind === 'frame' ? parsed.sessionTag : null);
 
-    this.log(`inbound from ${key}: kind=${parsed.kind}`);
+    this.log(`inbound message kind=${parsed.kind}`);
 
     if (parsed.kind === 'chat') {
       // Plaintext chat from this peer; surface to dashboard via logger, don't
       // start a tunnel.
-      this.log(`chat from ${key}: ${parsed.text.slice(0, 120)}`);
+      this.log('plaintext chat message ignored');
       return;
     }
     if (parsed.kind === 'meet-offer') {
+      this.emitCallEvent({
+        kind: 'meet-offer',
+        callId: parsed.callId,
+        peer,
+        dateMs: msg.date ?? null,
+      });
       if (this.isStaleMeetOffer(msg)) {
+        this.emitCallEvent({
+          kind: 'expired',
+          callId: parsed.callId,
+          peer,
+          reason: 'stale meet-offer message',
+        });
         this.log(`ignored stale meet-offer from ${this.keyFor(peer)} callId=${parsed.callId}`);
         return;
       }
@@ -242,37 +262,7 @@ export class BaleServerDispatcher {
       this.log(`ignored non-frame magic from ${key}: ${parsed.kind}`);
       return;
     }
-    if (parsed.protocolVersion !== this.protocolVersion()) {
-      this.log(`ignored frame with protocolVersion=${parsed.protocolVersion}; server expects v${this.protocolVersion()}`);
-      return;
-    }
-
-    let pt = this.tunnels.get(key);
-    if (!pt && peer.chatId === 0 && parsed.sessionTag) {
-      const suffix = `:${parsed.sessionTag}`;
-      const matches = Array.from(this.tunnels.entries()).filter(([candidateKey, candidate]) => {
-        return !candidate.closed && candidateKey.endsWith(suffix);
-      });
-      if (matches.length === 1) {
-        [key, pt] = matches[0]!;
-      }
-    }
-    if (!pt && peer.chatId === 0) {
-      this.log(`ignored frame with unknown peer and no matching active sessionTag=${parsed.sessionTag ?? '-'}`);
-      return;
-    }
-    const isNew = !pt;
-    if (!pt) {
-      pt = this.spawnTunnel(peer, parsed.sessionTag);
-      this.tunnels.set(key, pt);
-    }
-    const frameKey = keyForFrame(parsed.protocolVersion, parsed.sessionTag, parsed.body);
-    if (rememberFrame(pt, frameKey)) {
-      this.log(`ignored duplicate frame for ${key}`);
-      return;
-    }
-    this.log(`deliver ${parsed.body.byteLength}B to ${key} (new=${isNew})`);
-    pt.transport.deliver(parsed.body);
+    this.log(`ignored frame from ${key}; Bale Meet is the only tunnel data carrier`);
   }
 
   /**
@@ -297,15 +287,18 @@ export class BaleServerDispatcher {
     }
     if (!this.opts.baleClient) {
       const from = peer ? this.keyFor(peer) : `callId=${callId}`;
+      this.emitCallEvent({ kind: 'failed', callId, peer, reason: 'no BaleClient configured' });
       this.log(`meet-offer from ${from} but no BaleClient configured - ignoring`);
       return;
     }
     if (!this.opts.livekitFactory) {
       const from = peer ? this.keyFor(peer) : `callId=${callId}`;
+      this.emitCallEvent({ kind: 'failed', callId, peer, reason: 'no LiveKit factory configured' });
       this.log(`meet-offer from ${from} but no livekitFactory configured - ignoring`);
       return;
     }
     this.activeMeetCalls.add(key);
+    this.emitCallEvent({ kind: 'accepting', callId, peer });
     if (peer) this.log(`meet-offer from ${this.keyFor(peer)} callId=${callId}; accepting`);
     else this.log(`incoming-call push callId=${callId}; accepting`);
 
@@ -314,6 +307,12 @@ export class BaleServerDispatcher {
       result = await this.acceptMeetCallWithRetry(callId);
     } catch (e) {
       this.finishMeetCall(callId);
+      this.emitCallEvent({
+        kind: 'failed',
+        callId,
+        peer,
+        reason: `acceptCall failed: ${(e as Error).message}`,
+      });
       this.log(`acceptCall failed for ${callId}: ${(e as Error).message}`);
       return;
     }
@@ -322,6 +321,13 @@ export class BaleServerDispatcher {
     // peerFromCallResult() may return the server's own peer (callee) on some Bale versions,
     // so we prefer the peer from the __WT_MEET__ chat message which is always the sender.
     const displayPeer = peer ?? this.peerFromCallResult(result);
+    this.emitCallEvent({
+      kind: 'accepted',
+      callId,
+      peer: displayPeer,
+      roomUuid: result.roomUuid,
+      baseUrl: result.baseUrl,
+    });
 
     let room;
     try {
@@ -333,11 +339,26 @@ export class BaleServerDispatcher {
       });
     } catch (e) {
       this.finishMeetCall(callId);
+      this.emitCallEvent({
+        kind: 'failed',
+        callId,
+        peer: displayPeer,
+        roomUuid: result.roomUuid,
+        baseUrl: result.baseUrl,
+        reason: `LiveKit connect failed: ${(e as Error).message}`,
+      });
       this.log(`livekit connect failed for ${callId}: ${(e as Error).message}`);
       // Best-effort: hang up the call so the caller isn't left waiting.
       try { await this.opts.baleClient.discardCall(callId); } catch { /* ignore */ }
       return;
     }
+    this.emitCallEvent({
+      kind: 'livekit-connected',
+      callId,
+      peer: displayPeer,
+      roomUuid: result.roomUuid,
+      baseUrl: result.baseUrl,
+    });
 
     const transport = makeLivekitTransport({ room });
     const label = `webrtc:${this.keyFor(displayPeer)}`;
@@ -364,6 +385,13 @@ export class BaleServerDispatcher {
       closeMgr(reason);
       try { transport.close(reason); } catch { /* ignore */ }
       client.discardCall(callId).catch(() => undefined);
+      this.emitCallEvent({
+        kind: 'closed',
+        callId,
+        peer: logPeer,
+        tunnelId: handle.id,
+        reason,
+      });
       this.log(`webrtc tunnel closed for callId=${callId} peer=${this.keyFor(logPeer)}: ${reason}`);
     });
     const trackedHandle = this.withTransferTracking(handle, (n) => {
@@ -379,7 +407,6 @@ export class BaleServerDispatcher {
           handle: trackedHandle,
           onClientMetadata: this.opts.onClientMetadata,
           onLogReport: this.opts.onLogReport,
-          disableHeartbeat: this.opts.chatDisableHeartbeat,
         }).then((res) => res.mux)
       : runServerTunnel(transport, this.psk, { handle: trackedHandle });
 
@@ -396,6 +423,13 @@ export class BaleServerDispatcher {
       closeMgr(reason);
       try { transport.close(reason); } catch { /* ignore */ }
       client.discardCall(callId).catch(() => undefined);
+      this.emitCallEvent({
+        kind: 'failed',
+        callId,
+        peer: logPeer,
+        tunnelId: handle.id,
+        reason,
+      });
       this.log(`${reason} for callId=${callId} peer=${this.keyFor(logPeer)}`);
     }, BaleServerDispatcher.HANDSHAKE_HARD_TIMEOUT_MS);
     if (typeof (handshakeTimeoutId as unknown as { unref?: () => void }).unref === 'function') {
@@ -405,7 +439,16 @@ export class BaleServerDispatcher {
     runPromise
       .then((mux) => {
         clearTimeout(handshakeTimeoutId);
-        this.log(`webrtc handshake OK for callId=${callId} peer=${this.keyFor(this.meetLogPeer(callId, displayPeer))}`);
+        const logPeer = this.meetLogPeer(callId, displayPeer);
+        this.emitCallEvent({
+          kind: 'handshake-ok',
+          callId,
+          peer: logPeer,
+          tunnelId: handle.id,
+          roomUuid: result.roomUuid,
+          baseUrl: result.baseUrl,
+        });
+        this.log(`webrtc handshake OK for callId=${callId} peer=${this.keyFor(logPeer)}`);
         mux.onClose((reason) => {
           if (closed) return;
           closed = true;
@@ -414,6 +457,13 @@ export class BaleServerDispatcher {
           this.finishMeetCall(callId);
           closeMgr(reason);
           try { transport.close(reason); } catch { /* ignore */ }
+          this.emitCallEvent({
+            kind: 'closed',
+            callId,
+            peer: logPeer,
+            tunnelId: handle.id,
+            reason,
+          });
           this.log(`webrtc tunnel closed for callId=${callId} peer=${this.keyFor(logPeer)}: ${reason}`);
           client.discardCall(callId).catch(() => undefined);
         });
@@ -429,6 +479,13 @@ export class BaleServerDispatcher {
         closeMgr(reason);
         try { transport.close(reason); } catch { /* ignore */ }
         client.discardCall(callId).catch(() => undefined);
+        this.emitCallEvent({
+          kind: 'failed',
+          callId,
+          peer: logPeer,
+          tunnelId: handle.id,
+          reason,
+        });
         this.log(`${reason} for callId=${callId} peer=${this.keyFor(logPeer)}`);
       });
   }
@@ -578,97 +635,6 @@ export class BaleServerDispatcher {
     };
   }
 
-  private spawnTunnel(peer: Peer, sessionTag: string | null): PerPeerTunnel {
-    const key = this.keyFor(peer, sessionTag);
-    const chatCarrier = this.opts.chatCarrierLabel ?? 'bale';
-    const label = sessionTag
-      ? `${chatCarrier}:${peer.chatType.toLowerCase()}/${peer.chatId}#${sessionTag.slice(0, 8)}`
-      : `${chatCarrier}:${peer.chatType.toLowerCase()}/${peer.chatId}`;
-    const { handle, close: closeMgr } = this.manager.openTunnel(label, {
-      carrier: 'chat',
-      peer: toTunnelPeer(peer),
-      protocolVersion: this.protocolVersion(),
-    });
-    const sendIntervalMs = Math.max(0, this.opts.chatSendIntervalMs ?? 0);
-    let lastSendAt = 0;
-    let sendQueue: Promise<void> = Promise.resolve();
-    const transport = createPassiveTransport({
-      send: async (bytes) => {
-        sendQueue = sendQueue.then(async () => {
-          if (sendIntervalMs > 0) {
-            const waitMs = Math.max(0, lastSendAt + sendIntervalMs - Date.now());
-            if (waitMs > 0) await delay(waitMs);
-          }
-          const payload = this.protocolVersion() === 2
-            ? buildFrameMessageV2(bytes, sessionTag)
-            : buildFrameMessage(bytes, sessionTag);
-          await this.sidecar.sendMessage(peer, payload);
-          lastSendAt = Date.now();
-        });
-        await sendQueue;
-      },
-    });
-    const pt: PerPeerTunnel = {
-      transport,
-      startedAt: Date.now(),
-      closed: false,
-      sessionTag,
-      seenFrameKeys: [],
-      seenFrames: new Set<string>(),
-    };
-    let totalTransferred = 0;
-    const chatTimeout = this.chatIdleTimeoutMs();
-    let idleTimer = this.armIdleTimeout(chatTimeout, () => {
-      if (pt.closed || totalTransferred > 0) return;
-      pt.closed = true;
-      this.tunnels.delete(key);
-      const reason = this.idleCloseReason(chatTimeout);
-      transport.fireClose(reason);
-      closeMgr(reason);
-      this.log(`tunnel closed for ${key}: ${reason}`);
-    });
-    const trackedHandle = this.withTransferTracking(handle, (n) => {
-      if (n <= 0) return;
-      totalTransferred += n;
-      if (totalTransferred > 0) {
-        idleTimer = clearTimer(idleTimer);
-      }
-    });
-
-    const runPromise = this.protocolVersion() === 2
-      ? runServerTunnelV2(transport, {
-          identity: requireV2Identity(this.opts.identity),
-          handle: trackedHandle,
-          onClientMetadata: this.opts.onClientMetadata,
-          onLogReport: this.opts.onLogReport,
-        }).then((res) => res.mux)
-      : runServerTunnel(transport, this.psk, { handle: trackedHandle });
-
-    runPromise
-      .then((mux) => {
-        this.log(`handshake OK for ${key}`);
-        mux.onClose((reason) => {
-          if (pt.closed) return;
-          pt.closed = true;
-          idleTimer = clearTimer(idleTimer);
-          this.tunnels.delete(key);
-          closeMgr(reason);
-          this.log(`tunnel closed for ${key}: ${reason}`);
-        });
-      })
-      .catch((e) => {
-        idleTimer = clearTimer(idleTimer);
-        const reason = `handshake failed: ${(e as Error).message}`;
-        pt.closed = true;
-        this.tunnels.delete(key);
-        transport.fireClose(reason);
-        closeMgr(reason);
-        this.log(`${reason} for ${key}`);
-      });
-
-    return pt;
-  }
-
   private withTransferTracking(handle: TunnelHandle, onTransferBytes: (n: number) => void): TunnelHandle {
     return {
       id: handle.id,
@@ -696,11 +662,6 @@ export class BaleServerDispatcher {
     return timer;
   }
 
-  private chatIdleTimeoutMs(): number {
-    const raw = this.opts.zeroTransferTimeoutMs ?? BaleServerDispatcher.DEFAULT_ZERO_TRANSFER_TIMEOUT_MS;
-    return Number.isFinite(raw) && raw > 0 ? raw : BaleServerDispatcher.DEFAULT_ZERO_TRANSFER_TIMEOUT_MS;
-  }
-
   private meetIdleTimeoutMs(): number {
     const raw = this.opts.meetZeroTransferTimeoutMs ?? BaleServerDispatcher.DEFAULT_MEET_ZERO_TRANSFER_TIMEOUT_MS;
     return Number.isFinite(raw) && raw > 0 ? raw : BaleServerDispatcher.DEFAULT_MEET_ZERO_TRANSFER_TIMEOUT_MS;
@@ -718,65 +679,6 @@ function delay(ms: number): Promise<void> {
 function clearTimer(timer: ReturnType<typeof setTimeout> | null): null {
   if (timer) clearTimeout(timer);
   return null;
-}
-
-function rememberFrame(tunnel: PerPeerTunnel, key: string): boolean {
-  if (tunnel.seenFrames.has(key)) return true;
-  tunnel.seenFrames.add(key);
-  tunnel.seenFrameKeys.push(key);
-  if (tunnel.seenFrameKeys.length > 128) {
-    const old = tunnel.seenFrameKeys.shift();
-    if (old) tunnel.seenFrames.delete(old);
-  }
-  return false;
-}
-
-function keyForFrame(protocolVersion: 1 | 2, sessionTag: string | null, body: Uint8Array): string {
-  return `${protocolVersion}:${sessionTag ?? ''}:${Array.from(body).join(',')}`;
-}
-
-interface PassiveTransport extends Transport {
-  deliver(bytes: Uint8Array): void;
-  fireClose(reason: string): void;
-}
-
-function createPassiveTransport(opts: { send: (bytes: Uint8Array) => Promise<void> }): PassiveTransport {
-  let onMessage: ((bytes: Uint8Array) => void) | null = null;
-  let onClose: ((reason: string) => void) | null = null;
-  let closed = false;
-  return {
-    async send(bytes) {
-      if (closed) return;
-      try {
-        await opts.send(bytes);
-      } catch (e) {
-        if (closed) return;
-        closed = true;
-        onClose?.(`send failed: ${(e as Error).message}`);
-      }
-    },
-    onMessage(cb) {
-      onMessage = cb;
-    },
-    onClose(cb) {
-      onClose = cb;
-      if (closed) cb('already closed');
-    },
-    close(reason = 'passive-transport closed') {
-      if (closed) return;
-      closed = true;
-      onClose?.(reason);
-    },
-    deliver(bytes) {
-      if (closed) return;
-      onMessage?.(bytes);
-    },
-    fireClose(reason) {
-      if (closed) return;
-      closed = true;
-      onClose?.(reason);
-    },
-  };
 }
 
 function toTunnelPeer(peer: Peer): TunnelPeerSummary {

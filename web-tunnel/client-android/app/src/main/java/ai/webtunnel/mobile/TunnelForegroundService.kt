@@ -39,7 +39,7 @@ class TunnelForegroundService : Service() {
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
-    private var currentLabel: String = "Web Tunnel"
+    private var currentLabel: String = "NovaNet"
     private var currentState: String = "active"
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -114,7 +114,7 @@ class TunnelForegroundService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle(if (state == "reconnecting") "Web Tunnel reconnecting" else "Web Tunnel active")
+            .setContentTitle(if (state == "reconnecting") "NovaNet reconnecting" else "NovaNet active")
             .setContentText(label)
             .setContentIntent(openIntent)
             .setOngoing(true)

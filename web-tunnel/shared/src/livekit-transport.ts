@@ -9,9 +9,9 @@ import type { Transport } from './transport.js';
 export interface LivekitRoomLike {
   readonly localIdentity: string;
   /**
-   * Send a data-channel packet. `reliable` maps to LiveKit's DataPacket_Kind.
-   * `destinationIdentities` restricts delivery to the listed participants; an
-   * empty/undefined array means broadcast.
+   * Send one tunnel packet through the room's active byte carrier. Normally
+   * this is LiveKit DataPacket; Bale Meet can also route it through a synthetic
+   * media track when `canPublishData=false`.
    */
   publishData(
     bytes: Uint8Array,
@@ -79,7 +79,7 @@ export function makeLivekitTransport(opts: LivekitTransportOptions): Transport {
           if (closed) return;
           closed = true;
           resolveQueued();
-          onClose?.(`publishData failed: ${(e as Error).message}`);
+          onClose?.(`room packet send failed: ${(e as Error).message}`);
           return;
         }
       }

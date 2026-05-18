@@ -59,7 +59,7 @@ describe('dashboard', () => {
     const resp = await fetch(`http://127.0.0.1:${port}/`);
     expect(resp.status).toBe(200);
     const body = await resp.text();
-    expect(body).toContain('web-tunnel v0.4.0-beta dashboard');
+    expect(body).toContain('NovaNet v0.4.2 dashboard');
     expect(body).toContain('Active tunnels');
   });
 

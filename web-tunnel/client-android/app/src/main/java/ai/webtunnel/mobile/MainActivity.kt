@@ -70,7 +70,7 @@ class MainActivity : AppCompatActivity() {
     binding = ActivityMainBinding.inflate(layoutInflater)
     setContentView(binding.root)
     setSupportActionBar(binding.toolbar)
-    supportActionBar?.title = "Web Tunnel ${BuildConfig.VERSION_NAME}"
+    supportActionBar?.title = "NovaNet ${BuildConfig.VERSION_NAME}"
 
     chatAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, mutableListOf())
     chatAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
@@ -373,6 +373,7 @@ class MainActivity : AppCompatActivity() {
   }
 
   private fun fmtKbps(kbps: Int): String {
+    if (kbps < 0) return "n/a"
     return if (kbps >= 1024) "${"%.1f".format(kbps / 1024.0)} Mbps"
     else "$kbps Kbps"
   }
@@ -525,7 +526,7 @@ class MainActivity : AppCompatActivity() {
     if (!intent.getBooleanExtra("wt_vpn_probe", false)) return
     val socksPort = intent.getIntExtra("wt_socks_port", 1080)
     val sessionLabel = intent.getStringExtra("wt_vpn_label")?.takeIf { it.isNotBlank() }
-      ?: "Web Tunnel VPN Probe"
+      ?: "NovaNet VPN Probe"
     pendingTunnelRequest = null
     pendingVpnProbe = VpnProbeConfig(
       sessionLabel = sessionLabel,

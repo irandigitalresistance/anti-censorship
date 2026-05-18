@@ -23,6 +23,7 @@ out/
 # ---------- Release artifacts ----------
 release/
 releases/
+rl-dpi/
 *-unpacked/
 win-unpacked/
 mac/
@@ -129,6 +130,9 @@ tmp_*.txt
 *.sqlite-journal
 *.sqlite3
 *.db
+*.bale
+.webtunnel/
+**/.webtunnel/
 **/server/data/
 **/client/data/
 probe/captures/

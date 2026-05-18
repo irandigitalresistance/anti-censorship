@@ -268,11 +268,11 @@ export class Controller extends EventEmitter {
   }
 
   async sendPhoneCode(phone: string): Promise<void> {
-    console.log(`[controller] sendPhoneCode phone=${phone}`);
+    console.log('[controller] sendPhoneCode');
     this.status.lastError = null;
     try {
       const resp = await this.client.startPhoneAuth(phone);
-      console.log(`[controller] startPhoneAuth OK transactionHash=${resp.transactionHash.slice(0, 16)}… isRegistered=${resp.isRegistered}`);
+      console.log(`[controller] startPhoneAuth OK isRegistered=${resp.isRegistered}`);
       this.pendingTransactionHash = resp.transactionHash;
       this.status.pendingPhone = phone;
       this.status.loginStage = 'awaiting-code';
@@ -460,7 +460,7 @@ export class Controller extends EventEmitter {
     const config = this.managedConfig;
     if (!config) throw new Error('import a client config first');
     const normalized: TunnelStartOptions = {
-      carrier: 'webrtc',
+      carrier: startOpts.carrier ?? 'webrtc',
       peer: { chatId: config.serverPeer.chatId, chatType: config.serverPeer.chatType },
       socksPort: startOpts.socksPort,
       serverLabel: config.serverUuid,
@@ -602,7 +602,6 @@ export class Controller extends EventEmitter {
   private async startTunnelOnce(startOpts: TunnelStartOptions): Promise<{ socksPort: number }> {
     if (!this.sidecar) throw new Error('not authenticated');
     const carrier: Carrier = 'webrtc';
-    this.pushConnectingEvent('Initiating Bale Meet call...');
     const { transport, effectivePeer } = await this.createTransport(carrier, startOpts);
     this.currentTransport = transport;
     const keyId = this.serverKeyId(effectivePeer);
@@ -736,6 +735,7 @@ export class Controller extends EventEmitter {
     if (!startOpts.peer) throw new Error('a Bale peer must be selected');
     const effectivePeer = startOpts.peer;
     if (carrier !== 'webrtc') throw new Error(`unknown carrier: ${String(carrier)}`);
+    this.pushConnectingEvent('Initiating Bale Meet call...');
     const capturedSidecar = this.sidecar;
     const capturedPeer = effectivePeer;
     const usingInjectedFactory = this.livekitFactory != null;
@@ -779,6 +779,7 @@ export class Controller extends EventEmitter {
     if (error.message.includes('CONFIG_ALREADY_CONNECTED')) return false;
     if (error.message.includes('CONFIG_REQUIRED')) return false;
     if (error.message.includes('CONFIG_UNKNOWN_CLIENT')) return false;
+    if (error.message.includes('BALE_LIVEKIT_DATA_DISABLED')) return false;
     return true;
   }
 
@@ -803,16 +804,14 @@ export class Controller extends EventEmitter {
     }
     const latencyMs = Math.round(totalRtt / pings);
 
-    // Upload + download via speedtest stream
-    const CHUNK_SIZE = 32 * 1024;
-    const TOTAL_BYTES = 512 * 1024;
-    const payload = new Uint8Array(CHUNK_SIZE);
-
+    // Download via speedtest stream. Upload is intentionally not measured here:
+    // transport writes are queued, so a local write loop measures enqueue speed
+    // rather than real media-carrier throughput.
     const stream = mux.openStream({ kind: 'domain', host: 'wt-speedtest', port: 0 });
     let downloadBytes = 0;
 
     const downloadDone = new Promise<number>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('speedtest timeout')), 15_000);
+      const t = setTimeout(() => reject(new Error('speedtest timeout')), 20_000);
       stream.onData((data) => {
         downloadBytes += data.byteLength;
       });
@@ -822,20 +821,12 @@ export class Controller extends EventEmitter {
       });
     });
 
-    const uploadStart = Date.now();
-    let sent = 0;
-    while (sent < TOTAL_BYTES) {
-      const toSend = Math.min(CHUNK_SIZE, TOTAL_BYTES - sent);
-      stream.write(payload.subarray(0, toSend));
-      sent += toSend;
-    }
-    const uploadMs = Date.now() - uploadStart;
-
     const downloadStart = Date.now();
+    stream.write(new Uint8Array([1, 2, 3, 4]));
     await downloadDone;
     const downloadMs = Date.now() - downloadStart;
 
-    const uploadKbps = Math.round((sent / 1024) / (uploadMs / 1000));
+    const uploadKbps = -1;
     const downloadKbps = Math.round((downloadBytes / 1024) / (downloadMs / 1000));
     return { latencyMs, uploadKbps, downloadKbps };
   }
@@ -964,8 +955,7 @@ export class Controller extends EventEmitter {
   }
 
   private async sendLogsViaShortConnection(startOpts: TunnelStartOptions, report: V2LogReport): Promise<void> {
-    const carrier = startOpts.carrier ?? 'webrtc';
-    const { transport, effectivePeer } = await this.createTransport(carrier, startOpts);
+    const { transport, effectivePeer } = await this.createTransport('webrtc', startOpts);
     const keyId = this.serverKeyId(effectivePeer);
     const tunnel = await withTimeout(
       runClientTunnelV2(transport, {

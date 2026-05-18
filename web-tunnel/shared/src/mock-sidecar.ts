@@ -7,7 +7,7 @@ interface MockUser {
 
 /**
  * In-memory bus for wiring up multiple mock sidecars that share a fake chat room.
- * Useful for unit-testing ChatTransport end-to-end without any Python or Bale.
+ * Useful for unit-testing Bale message signaling without any Python or Bale.
  */
 export class MockBalBus {
   private readonly sidecars = new Map<number, MockSidecar>();

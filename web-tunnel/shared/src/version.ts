@@ -1,5 +1,5 @@
-export const APP_VERSION = '0.4.0-beta';
-export const APP_VERSION_LABEL = 'v0.4.0-beta';
+export const APP_VERSION = '0.4.2';
+export const APP_VERSION_LABEL = 'v0.4.2';
 
 export type ClientType = 'windows' | 'android' | 'cli';
 

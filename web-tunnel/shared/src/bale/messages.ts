@@ -688,6 +688,11 @@ export const INCOMING_CALL_PUSH_TAG_BYTES = new Uint8Array([0xba, 0xe4, 0x19]);
  *
  * Important: LiveKit SDKs append `/rtc` / `/rtc/v1` internally. Bale's
  * `baseUrl` is already the server root, so we must NOT append `/rtc` here.
+ *
+ * Bale Meet tokens observed on 2026-05-18 set `video.canPublishData=false`
+ * for both StartCall and AcceptCall participants. LiveKit media still connects;
+ * the tunnel code falls back to a media-backed carrier when the normal
+ * DataPacket path is disabled.
  */
 export function buildLiveKitUrl(result: StartCallResult): string {
   const q = new URLSearchParams({
@@ -696,7 +701,7 @@ export function buildLiveKitUrl(result: StartCallResult): string {
     sdk: 'js',
     version: '2.15.2',
     protocol: '16',
-    adaptive_stream: '1',
+    adaptive_stream: '0',
   });
   return `${result.baseUrl}?${q.toString()}`;
 }

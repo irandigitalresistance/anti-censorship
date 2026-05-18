@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="app_name">Web Tunnel v0.4.0-beta</string>
-  <string name="header_title">web-tunnel v0.4.0-beta</string>
+  <string name="app_name">NovaNet</string>
+  <string name="header_title">NovaNet 0.4.2</string>
   <string name="not_logged_in">not logged in</string>
   <string name="open_log">Open log</string>
   <string name="sign_out">Sign out</string>

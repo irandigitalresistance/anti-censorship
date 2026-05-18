@@ -87,7 +87,7 @@ public final class TProxyService extends VpnService {
 
     String sessionLabel = intent.getStringExtra(TunnelVpnBridge.EXTRA_SESSION_LABEL);
     if (sessionLabel == null || sessionLabel.isEmpty()) {
-      sessionLabel = "Web Tunnel";
+      sessionLabel = "NovaNet";
     }
     int socksPort = intent.getIntExtra(TunnelVpnBridge.EXTRA_SOCKS_PORT, 1080);
     boolean remoteDns = intent.getBooleanExtra(TunnelVpnBridge.EXTRA_REMOTE_DNS, true);

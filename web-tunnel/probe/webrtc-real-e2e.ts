@@ -1,8 +1,13 @@
 import http from 'node:http';
 import net from 'node:net';
+import fs from 'node:fs';
+import path from 'node:path';
 import process from 'node:process';
-import { Controller } from '../client-electron/src/main/controller.ts';
-import { ServerController } from '../server-electron/src/main/controller.ts';
+import clientControllerModule from '../client-electron/src/main/controller.ts';
+import serverControllerModule from '../server-electron/src/main/controller.ts';
+
+const { Controller } = clientControllerModule as unknown as typeof import('../client-electron/src/main/controller.ts');
+const { ServerController } = serverControllerModule as unknown as typeof import('../server-electron/src/main/controller.ts');
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -86,7 +91,9 @@ async function main(): Promise<void> {
   delete process.env.WT_MOCK_LIVEKIT_PORT;
 
   const server = new ServerController({ sessionFile: `${process.env.USERPROFILE}\\.webtunnel\\server-native-session.json` });
-  const client = new Controller({ sessionFile: `${process.env.USERPROFILE}\\.webtunnel\\native-session.json` });
+  const probeDir = path.join(process.env.USERPROFILE ?? '.', '.webtunnel', 'probe-real-e2e');
+  fs.mkdirSync(probeDir, { recursive: true });
+  const client = new Controller({ sessionFile: path.join(probeDir, 'native-session.json') });
 
   server.on('status', (s) => log('[server-status]', {
     loginStage: s.loginStage,
@@ -109,8 +116,16 @@ async function main(): Promise<void> {
     await sleep(1500);
 
     log('[server-me]', server.getStatus().me);
-    log('[client-me]', client.getStatus().me);
     if (server.getStatus().loginStage !== 'ready') throw new Error('server session not ready');
+    const profiles = JSON.parse(fs.readFileSync(`${process.env.USERPROFILE}\\.webtunnel\\server-client-profiles.json`, 'utf8')) as {
+      clients?: Array<{ name?: string; config?: string }>;
+    };
+    const profile = profiles.clients?.find((client) => client.name === 'E2E test' && client.config)
+      ?? profiles.clients?.find((client) => client.config);
+    if (!profile?.config) throw new Error('no saved client config found');
+    await client.importClientConfig(profile.config);
+    await sleep(500);
+    log('[client-me]', client.getStatus().me);
     if (client.getStatus().loginStage !== 'ready') throw new Error('client session not ready');
 
     backend = await bootBackend();
@@ -140,6 +155,7 @@ async function main(): Promise<void> {
     try { await client.dispose(); } catch (e) { console.error('[cleanup-client]', e); }
     try { await server.dispose(); } catch (e) { console.error('[cleanup-server]', e); }
     try { if (backend) await backend.close(); } catch (e) { console.error('[cleanup-backend]', e); }
+    try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch (e) { console.error('[cleanup-probe-dir]', e); }
   }
 }
 

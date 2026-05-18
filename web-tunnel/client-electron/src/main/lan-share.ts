@@ -45,7 +45,7 @@ export class LanShare extends EventEmitter {
   constructor(private opts: LanShareOptions) {
     super();
     this.runtimeDir = opts.runtimeDir
-      ?? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local'), 'WebTunnel');
+      ?? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local'), 'NovaNet');
     if (!fs.existsSync(this.runtimeDir)) fs.mkdirSync(this.runtimeDir, { recursive: true });
     this.stateFile = path.join(this.runtimeDir, 'lan-share.json');
     this.configFile = path.join(this.runtimeDir, 'lan-share.json5');

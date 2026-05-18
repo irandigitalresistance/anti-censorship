@@ -6,7 +6,7 @@ Usage (Windows PowerShell, inside bale-sidecar folder with venv activated):
     python -m bale_sidecar.debug_login send <phone>
     python -m bale_sidecar.debug_login verify <otp>
 
-State + raw bytes saved to ~\.webtunnel\debug-login-*.bin
+State + raw bytes saved to ~/.webtunnel/debug-login-*.bin
 """
 from __future__ import annotations
 
@@ -40,10 +40,8 @@ async def cmd_send(phone: str) -> int:
         print(f"start_phone_auth failed: {resp!r}")
         return 3
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(
-        json.dumps({"transaction_hash": resp.transaction_hash, "phone": phone_i})
-    )
-    print(f"OTP sent to {phone_i}. Transaction saved. Run:")
+    STATE_FILE.write_text(json.dumps({"transaction_hash": resp.transaction_hash}))
+    print("OTP sent. Transaction saved. Run:")
     print("  python -m bale_sidecar.debug_login verify <OTP>")
     return 0
 
@@ -60,7 +58,7 @@ async def cmd_verify(code: str) -> int:
     call = ValidateCode(
         code=code.strip(), transaction_hash=state["transaction_hash"]
     )
-    print(f"POSTing ValidateCode with tx_hash={state['transaction_hash']!r} code={code!r}")
+    print("POSTing ValidateCode with stored transaction hash and provided OTP")
     try:
         content = await client.session.post(call)
     except Exception:
@@ -88,8 +86,8 @@ async def cmd_verify(code: str) -> int:
     # Now try to parse, but show the FULL traceback — not just the wrapped message.
     print("\n--- parse attempt ---")
     try:
-        model = client._parse_session_content(content)
-        print(f"parse OK: jwt.value={model.jwt.value[:40]}... user.id={getattr(model.user, 'id', '?')}")
+        client._parse_session_content(content)
+        print("parse OK")
         STATE_FILE.unlink(missing_ok=True)
         return 0
     except Exception:

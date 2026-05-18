@@ -448,12 +448,15 @@ class LiveKitTransport(
           identities = identities,
         )
         if (result.isFailure && closed.compareAndSet(false, true)) {
-          onCloseHandler?.invoke("publishData failed: ${result.exceptionOrNull()?.message ?: "unknown"}")
+          onCloseHandler?.invoke(
+            "publishData failed: ${result.exceptionOrNull()?.message ?: "unknown"} " +
+              "(${liveKitPermissionSummary(room)})",
+          )
           break
         }
       } catch (error: Throwable) {
         if (closed.compareAndSet(false, true)) {
-          onCloseHandler?.invoke("publishData failed: ${error.message ?: "unknown"}")
+          onCloseHandler?.invoke("publishData failed: ${error.message ?: "unknown"} (${liveKitPermissionSummary(room)})")
         }
         break
       }
@@ -515,6 +518,13 @@ private data class OutboundPacket(
     val byPriority = priority.compareTo(other.priority)
     return if (byPriority != 0) byPriority else seq.compareTo(other.seq)
   }
+}
+
+private fun liveKitPermissionSummary(room: Room): String {
+  val permissions = room.localParticipant.permissions
+  return "canPublish=${permissions?.canPublish ?: "unknown"}, " +
+    "canPublishData=${permissions?.canPublishData ?: "unknown"}, " +
+    "canSubscribe=${permissions?.canSubscribe ?: "unknown"}"
 }
 
 class Socks5Server(

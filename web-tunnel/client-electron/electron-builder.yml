@@ -1,11 +1,12 @@
 appId: ai.anthropic.webtunnel
-productName: Web Tunnel
+productName: NovaNet
 directories:
   output: ../release
 files:
   - "dist/**/*"
   - "src/renderer/**/*"
   - "src/main/preload.cjs"
+  - "build/icon.png"
   - "package.json"
   # Pull in the LiveKit native SDK explicitly. We mark it `--external` from
   # esbuild so the bundled main.js does a runtime `import('@livekit/rtc-node')`,
@@ -39,7 +40,8 @@ win:
     - target: portable
       arch:
         - x64
-  artifactName: "WebTunnel-Client-0.4.0-beta.${ext}"
+  icon: "build/icon.ico"
+  artifactName: "NovaNet-Client-0.4.2.${ext}"
   signAndEditExecutable: false
 portable:
-  artifactName: "WebTunnel-Client-0.4.0-beta.${ext}"
+  artifactName: "NovaNet-Client-0.4.2.${ext}"

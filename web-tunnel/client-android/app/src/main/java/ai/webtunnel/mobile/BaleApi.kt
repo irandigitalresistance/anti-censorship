@@ -698,7 +698,7 @@ private fun buildLiveKitUrl(result: StartCallResult): String {
     "sdk=js",
     "version=2.15.2",
     "protocol=16",
-    "adaptive_stream=1",
+    "adaptive_stream=0",
   ).joinToString("&")
   return "${result.baseUrl}?$query"
 }

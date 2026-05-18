@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline';" />
-    <title>Web Tunnel Server v0.4.0-beta</title>
+    <title>NovaNet Server v0.4.2</title>
     <style>
       :root {
         --bg: #0e0f12;
@@ -47,6 +47,13 @@
       .step-sub { color: var(--muted); font-size: 11px; margin-top: 4px; }
       .split-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
       .split-actions button { flex: 0 0 auto; }
+      .tabs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 12px; }
+      .tab-btn { width: auto; padding: 6px 12px; background: transparent; color: var(--muted); border-color: var(--border); }
+      .tab-btn.active { color: #08211a; background: var(--accent); border-color: var(--accent); }
+      .status-pill { display: inline-block; padding: 2px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+      .status-pill.connected, .status-pill.accepted { color: var(--accent); border-color: rgba(76,212,163,.45); }
+      .status-pill.failed, .status-pill.expired { color: var(--err); border-color: rgba(228,86,86,.45); }
+      .status-pill.accepting, .status-pill.offered, .status-pill.incoming { color: var(--warn); border-color: rgba(244,160,86,.45); }
       code { background: var(--bg); padding: 2px 5px; border-radius: 3px; font-size: 11px; border: 1px solid var(--border); }
       .section-title { margin: 16px 0 10px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
 
@@ -80,7 +87,7 @@
   </head>
   <body>
     <header>
-      <h1>web-tunnel server v0.4.0-beta</h1>
+      <h1>NovaNet server v0.4.2</h1>
       <div id="me" class="me">not logged in</div>
       <button id="open-log" class="btn" title="open debug log">Open log</button>
       <button id="signout" class="btn" style="display:none;">Sign out</button>
@@ -207,10 +214,35 @@
 
       <!-- Users list — always visible after login. Shows every account that
            has ever connected with persistent up/down/total counters. -->
+      <div id="activity-tabs" class="card" style="display:none; padding:0;">
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="clients">Clients</button>
+          <button class="tab-btn" data-tab="incoming">Incoming calls</button>
+          <button class="tab-btn" data-tab="logs">Client logs</button>
+        </div>
+      </div>
+
       <div id="users-card" class="card" style="display:none;">
         <h2>Clients</h2>
         <div id="connections-list"></div>
         <div id="connections-empty" class="step-sub">No clients yet. Create a client config and have it connect.</div>
+      </div>
+
+      <div id="incoming-calls-card" class="card" style="display:none;">
+        <h2>Incoming calls</h2>
+        <table id="incoming-calls-table" style="display:none;">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Who</th>
+              <th>State</th>
+              <th>Call</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody id="incoming-calls-body"></tbody>
+        </table>
+        <div id="incoming-calls-empty" class="step-sub">No incoming calls observed in this server run.</div>
       </div>
 
       <div id="logs-card" class="card" style="display:none;">
@@ -235,6 +267,7 @@
       const $ = (id) => document.getElementById(id);
       let startedAt = null;
       let busy = false;
+      let activeActivityTab = 'clients';
 
       function fmtBytes(n) {
         if (n < 1024) return n + ' B';
@@ -453,6 +486,7 @@
                   '<div class="metric"><span class="val">down ' + fmtBytes(client.bytesDown) + '</span><span class="lbl">Down</span></div>' +
                   '<div class="metric"><span class="val">total ' + fmtBytes(client.totalBytes) + '</span><span class="lbl">Total</span></div>' +
                   '<button class="link copy-config-btn" data-config="' + esc(client.config) + '" style="margin-left:8px; align-self:center;">Copy config</button>' +
+                  '<button class="link delete-config-btn" data-client-id="' + esc(client.id) + '" data-client-name="' + esc(client.name) + '" style="margin-left:8px; align-self:center; color:var(--err);">Remove</button>' +
                 '</div>' +
               '</div>' +
               renderConnectionItems(conns) +
@@ -510,12 +544,64 @@
         )).join('');
       }
 
+      function peerLabel(peer) {
+        if (!peer) return 'Unknown caller';
+        if (peer.name && peer.name.trim()) return peer.name.trim();
+        if (peer.username && peer.username.trim()) return '@' + peer.username.trim();
+        return peer.chatType + ' ' + peer.chatId;
+      }
+
+      function peerSub(peer) {
+        if (!peer) return 'waiting for meet offer';
+        return peer.username
+          ? peer.chatType + ' ' + peer.chatId + ' - @' + peer.username
+          : peer.chatType + ' ' + peer.chatId;
+      }
+
+      function renderIncomingCalls(calls) {
+        const body = $('incoming-calls-body');
+        const table = $('incoming-calls-table');
+        const empty = $('incoming-calls-empty');
+        calls = calls || [];
+        if (calls.length === 0) {
+          body.innerHTML = '';
+          table.style.display = 'none';
+          empty.style.display = 'block';
+          return;
+        }
+        table.style.display = 'table';
+        empty.style.display = 'none';
+        body.innerHTML = calls.map((call) => {
+          const detail = [
+            call.message || '',
+            call.roomUuid ? 'room ' + call.roomUuid : '',
+            call.baseUrl || '',
+            call.tunnelId ? 'tunnel ' + call.tunnelId : '',
+            call.source ? 'source ' + call.source : '',
+          ].filter(Boolean).join(' | ');
+          return (
+            '<tr>' +
+              '<td class="num"><span data-call-updated-at="' + esc(call.updatedAt) + '">' + fmtDuration(Date.now() - call.updatedAt) + ' ago</span></td>' +
+              '<td><div>' + esc(peerLabel(call.peer)) + '</div><div class="muted" style="font-size:11px;">' + esc(peerSub(call.peer)) + '</div></td>' +
+              '<td><span class="status-pill ' + esc(call.status) + '">' + esc(call.status) + '</span></td>' +
+              '<td><code>' + esc(call.callId) + '</code></td>' +
+              '<td>' + esc(detail || '-') + '</td>' +
+            '</tr>'
+          );
+        }).join('');
+      }
+
       function refreshAges() {
         if (startedAt) $('k-since').textContent = fmtDuration(Date.now() - startedAt);
         document.querySelectorAll('[data-opened-at]').forEach((el) => {
           const openedAt = Number(el.getAttribute('data-opened-at'));
           if (!Number.isFinite(openedAt)) return;
           el.textContent = fmtDuration(Date.now() - openedAt);
+        });
+        document.querySelectorAll('[data-call-updated-at]').forEach((el) => {
+          const updatedAt = Number(el.getAttribute('data-call-updated-at'));
+          if (!Number.isFinite(updatedAt)) return;
+          el.textContent = fmtDuration(Date.now() - updatedAt) + ' ago';
         });
       }
 
@@ -548,8 +634,13 @@
         show('running', status.running);
         // Users + log uploads are always visible after login — operator can
         // still inspect / reset users while the server is stopped.
-        show('users-card', server.loginStage === 'ready');
-        show('logs-card', server.loginStage === 'ready');
+        show('activity-tabs', server.loginStage === 'ready');
+        show('users-card', server.loginStage === 'ready' && activeActivityTab === 'clients');
+        show('incoming-calls-card', server.loginStage === 'ready' && activeActivityTab === 'incoming');
+        show('logs-card', server.loginStage === 'ready' && activeActivityTab === 'logs');
+        document.querySelectorAll('.tab-btn').forEach((btn) => {
+          btn.classList.toggle('active', btn.getAttribute('data-tab') === activeActivityTab);
+        });
 
         if (server.pendingPhone) {
           $('code-phone-display').textContent = server.pendingPhone;
@@ -571,16 +662,27 @@
           $('k-total').textContent = fmtBytes((status.lifetimeBytesUp || 0) + (status.lifetimeBytesDown || 0));
           $('k-since').textContent = fmtDuration(Date.now() - status.startedAt);
           renderClients(status.users || [], status.connections || [], status.clientProfiles || [], client);
+          renderIncomingCalls(status.incomingCalls || []);
           renderLogs(status.logs || []);
         } else {
           startedAt = null;
           // Even when the server isn't running, keep showing the persistent
           // user list so the operator can still inspect or reset accounts.
           renderClients(status.users || [], [], status.clientProfiles || [], client);
+          renderIncomingCalls(status.incomingCalls || []);
           renderLogs(status.logs || []);
         }
       }
       setInterval(refreshAges, 1000);
+
+      $('activity-tabs').addEventListener('click', async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const tab = target.getAttribute('data-tab');
+        if (!tab) return;
+        activeActivityTab = tab;
+        render(await window.wt.getStatus());
+      });
 
       $('send-code').addEventListener('click', async () => {
         const p = $('phone').value.trim();
@@ -691,6 +793,14 @@
         if (connId) {
           if (!confirm('Terminate this connection now?')) return;
           try { await window.wt.terminateConnection(connId, 'terminated by dashboard operator'); }
+          catch (e) { alert(e.message); }
+          return;
+        }
+        const clientId = target.getAttribute('data-client-id');
+        if (clientId) {
+          const name = target.getAttribute('data-client-name') || clientId;
+          if (!confirm('Remove config "' + name + '"?\nActive connections using it will be terminated when possible.')) return;
+          try { await window.wt.deleteClient(clientId); }
           catch (e) { alert(e.message); }
           return;
         }

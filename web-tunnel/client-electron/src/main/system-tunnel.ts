@@ -44,7 +44,7 @@ export class SystemTunnel extends EventEmitter {
   constructor(private opts: SystemTunnelOptions) {
     super();
     this.runtimeDir = opts.runtimeDir
-      ?? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local'), 'WebTunnel');
+      ?? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local'), 'NovaNet');
     if (!fs.existsSync(this.runtimeDir)) fs.mkdirSync(this.runtimeDir, { recursive: true });
     this.configFile = path.join(this.runtimeDir, 'sing-box.json');
     this.logFile = path.join(this.runtimeDir, 'sing-box.log');
@@ -129,7 +129,7 @@ export class SystemTunnel extends EventEmitter {
       throw new Error('system tunnel is Windows-only');
     }
     if (!SystemTunnel.isElevated()) {
-      this.setStatus('error', 'must run Web Tunnel as Administrator to enable system tunnel');
+          this.setStatus('error', 'must run NovaNet as Administrator to enable system tunnel');
       throw new Error('not elevated');
     }
     if (!this.opts.singBoxPath || !fs.existsSync(this.opts.singBoxPath)) {
