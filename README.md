@@ -1,8 +1,12 @@
-# anti-censorship
+# NovaNet
 
-A circumvention tunnel that smuggles arbitrary TCP/UDP traffic through the
-**Bale** messenger (an Iranian chat app that is not blocked inside the censored
-region). The operator runs a server outside the firewall on their own VPS and
+**NovaNet 0.4.2** — a circumvention tunnel that smuggles arbitrary TCP/UDP
+traffic through the **Bale** messenger (an Iranian chat app that is not blocked
+inside the censored region). "NovaNet" is the product name carried by the
+shipped apps (Windows client/server and Android client); the repository and the
+internal pnpm packages are still named `web-tunnel`.
+
+The operator runs a server outside the firewall on their own VPS and
 **logs in both Bale accounts there** — the server's own account *and* a client
 account they provision on the end user's behalf. The end user inside the
 firewall runs a small client app and only ever imports an operator-issued
@@ -73,26 +77,34 @@ workspace defines six packages plus two app shells:
 
 | Path | What it is |
 |---|---|
-| `web-tunnel/shared/` | Protocol primitives shared by every component: framing, AEAD handshake (PSK + Noble crypto), stream multiplexer (`mux`, `mux-v2`), Bale gRPC-Web client, LiveKit transport, mocks. |
+| `web-tunnel/shared/` | Protocol primitives shared by every component: framing, AEAD handshake (PSK + Noble crypto), stream multiplexer (`mux`, `mux-v2`), Bale gRPC-Web client, LiveKit transport, the Bale Meet factory, the media-video packet carrier (`media-video-carrier`/`media-video-codec`), mocks. |
 | `web-tunnel/client/` | Headless Node client. Opens the local SOCKS5 listener and runs the tunnel over a `Transport` (WebSocket loopback for dev, Bale Meet/WebRTC in prod). |
 | `web-tunnel/server/` | Headless Node server. Accepts tunnels, multiplexes streams, egresses to the real internet, hosts the loopback dashboard on `:4402`. |
 | `web-tunnel/server/py/` | Python "Bale sidecar" (`bale_sidecar`). Wraps the unofficial Bale gRPC API; handles login (phone → OTP → JWT) and message I/O. (`server-electron` uses an in-process native TS sidecar instead.) |
 | `web-tunnel/shared/src/client-config.ts` | The `wtc1:` client config: AES-GCM packing of the client Bale session + server peer + server UUID + pinned fingerprint. Encoded on the server, decoded by every client app. |
-| `web-tunnel/client-electron/` | Windows desktop app. Wraps the client in Electron. No Bale login UI — the user pastes the operator-issued config and hits Start/Stop. Builds to `WebTunnel-Client.exe`. |
-| `web-tunnel/server-electron/` | The operator's server (one-binary install on Windows VPS). Logs in **both** Bale accounts, mints per-user client configs, runs the dashboard. |
-| `web-tunnel/client-android/` | Native Android client (Kotlin). Imports the operator-issued config; VPN-service mode using `hev-socks5-tunnel` to capture all device traffic into the SOCKS5 proxy. |
+| `web-tunnel/client-electron/` | **NovaNet** Windows desktop client. Wraps the client in Electron. No Bale login UI — the user pastes the operator-issued config and hits Start/Stop. Builds to the portable `NovaNet-Client-0.4.2.exe`. |
+| `web-tunnel/server-electron/` | **NovaNet Server** — the operator's server (one-binary install on a Windows VPS; a macOS zip target also exists). Logs in **both** Bale accounts, mints per-user client configs, runs the dashboard. Builds to `NovaNet-Server-0.4.2.exe`. |
+| `web-tunnel/client-android/` | Native **NovaNet** Android client (Kotlin). Imports the operator-issued config; VPN-service mode using `hev-socks5-tunnel` to capture all device traffic into the SOCKS5 proxy. |
 | `web-tunnel/probe/` | Throwaway scripts and end-to-end probes used during development (network captures, WebRTC sanity checks). |
 
 ## Protocol, in layers
 
-1. **Carrier.** A bidirectional byte channel between the operator's two Bale
-   accounts. Managed-config clients use a **LiveKit WebRTC data channel**
-   created via Bale's `Meet/StartCall` RPC (high throughput): the client app
-   places a Meet call to the server account, the server's incoming-call
-   watcher accepts it, and both join the same LiveKit room. A chat-message
-   carrier (low throughput, ~5–30 KB/s) also exists in `shared/` for the
-   legacy/headless path. The call carrier is wired end-to-end in
-   `server-electron`/`client-electron`/`client-android` but is still beta.
+1. **Carrier (Meet-only).** A bidirectional byte channel between the
+   operator's two Bale accounts, carried by a **Bale Meet call**. There is no
+   longer a chat-message carrier — the old `chat-transport` was removed in
+   0.4.2, so all clients use the Meet path. The client app places a Meet call
+   to the server account via Bale's `Meet/StartCall` RPC, the server's
+   incoming-call watcher accepts it, and both join the same room on **Bale's
+   own LiveKit SFU** (`wss://meet-*.ble.ir/rtc`, which is whitelisted inside
+   the region). Bytes ride a **LiveKit WebRTC data channel** when Bale grants
+   data publishing. When Bale's Meet permission allows media but disables data
+   packets (`canPublishData=false`), the tunnel transparently falls back to a
+   **media-video packet carrier**: it publishes a synthetic LiveKit video
+   track (`wt-media-packets`) and encodes tunnel packets into I420 video
+   frames with its own ACK/retransmit (`shared/src/bale/media-video-carrier.ts`
+   on Node, `MediaVideoTransport.kt` on Android). The carrier is wired
+   end-to-end in `server-electron`/`client-electron`/`client-android` but is
+   still beta.
 2. **Magic envelope.** Every payload begins with a 4-byte magic
    (`__WT_REQ__`, `__WT_OK__`, `__WT_FRAME__`, …) so the receiver can tell
    tunnel traffic apart from real chat messages and ignore the rest.
@@ -205,32 +217,30 @@ gets `nonce ‖ ciphertext ‖ tag`. They cannot:
 - replay an old message in a new session (different session key, different
   nonces; mux frames also carry stream IDs and sequence info).
 
-### Wire format (chat carrier)
+### Wire format (Meet carrier)
 
-When the chat carrier is used (legacy/headless path), a message looks like
-this:
+The data bytes never travel as chat text any more — they ride the Meet call's
+LiveKit transport (data channel, or the media-video track on the fallback
+path). On the wire to Bale's SFU each payload is just AEAD ciphertext: no
+headers, no recognisable protocol bytes inside. The framing the receiver
+parses lives *inside* that ciphertext (magic prefix + handshake/frame/mux), so
+Bale only ever sees opaque media/data packets on an ordinary-looking call.
 
-```
-__WT_FRAME__<sessionTag>.<base64url(ciphertext)>
-```
+The only thing that still travels as a tiny **magic-prefixed message** is
+call setup: after `Meet/StartCall` the client signals the callee with
+`__WT_MEET__<callId>` so the server can `AcceptCall` and join the same room.
+The magic prefixes (`__WT_REQ__`, `__WT_OK__`, `__WT_DENY__`, `__WT_FRAME__`,
+`__WT2_FRAME__`, `__WT_MEET__`, defined in
+[`shared/src/magic.ts`](./web-tunnel/shared/src/magic.ts)) let the dispatcher
+tell tunnel traffic apart from anything else and ignore non-tunnel input.
 
-- The **magic prefix** (`__WT_REQ__`, `__WT_OK__`, `__WT_DENY__`,
-  `__WT_FRAME__`, `__WT2_FRAME__`, `__WT_MEET__`) tells the dispatcher this is
-  tunnel traffic. Anything without it is treated as a real chat message and
-  ignored. Defined in [`shared/src/magic.ts`](./web-tunnel/shared/src/magic.ts).
-- The optional **session tag** lets one Bale chat carry several concurrent
-  client tunnels without crosstalk.
-- The **base64url** part is just the AEAD ciphertext — no headers, no
-  recognisable protocol bytes inside.
-
-This is honest about what it is: it does **not** try to look like normal chat
-("steganography"). It looks like a bot trading opaque tokens. The hiding power
-is "Bale won't single this out among millions of chats", not "this is
-indistinguishable from a love letter". A motivated platform-side classifier
-that flags long base64-looking messages on a single account would catch it —
-which is why the managed-config path moved to the LiveKit/WebRTC carrier,
-where the bytes ride a real Bale Meet call instead of chat messages, and why
-the tunnelling accounts are operator-owned throwaways.
+This is honest about what it is: it does **not** try to look like a normal
+video call ("steganography"). It looks like two accounts on a Bale Meet call
+exchanging opaque media. The hiding power is "Bale won't single this call out
+among millions", not "this is indistinguishable from a real face-to-face
+call" — a motivated platform-side classifier could still flag the traffic
+pattern, which is why the tunnelling accounts are operator-owned throwaways
+(see the account model above).
 
 ### Local secrets
 
@@ -273,8 +283,9 @@ The full operator and end-user guides already live next to the code:
 - **Server operator:** [`web-tunnel/server/SERVER-SETUP.md`](./web-tunnel/server/SERVER-SETUP.md)
   — VPS install, Bale login, systemd unit, dashboard SSH-tunnel.
 - **End user (Windows):** [`web-tunnel/client-electron/CLIENT-SETUP.md`](./web-tunnel/client-electron/CLIENT-SETUP.md)
-  — extract zip, paste the operator-issued `wtc1:` config, hit Start, point
-  apps at SOCKS5 `127.0.0.1:1080`. (No Bale login on the user's side.)
+  — run the portable `NovaNet-Client-0.4.2.exe`, paste the operator-issued
+  `wtc1:` config, hit Start, point apps at SOCKS5 `127.0.0.1:1080`. (No Bale
+  login on the user's side.)
 
 Quick local development loop (no Bale account needed — uses the loopback
 WebSocket transport and mocks):
@@ -289,9 +300,15 @@ pnpm -r typecheck
 Building release binaries:
 
 ```bash
-pnpm release:windows    # both client and server .exe
-pnpm release:android    # signed APK via Gradle
+pnpm release:windows    # NovaNet-Server-0.4.2.exe + NovaNet-Client-0.4.2.exe
+pnpm release:android    # release APK via Gradle
+pnpm release:all        # both of the above
 ```
+
+The built artifacts (`.exe`, `.apk`, archives) are **not committed to the
+repository** — `release/` and binary extensions are git-ignored. The operator
+builds them and uploads/distributes the NovaNet client and server to users
+out-of-band; nothing in git contains a runnable binary.
 
 ## Threat model and limits (v1)
 
@@ -306,9 +323,11 @@ pnpm release:android    # signed APK via Gradle
   goes with it. Lock it down.
 - **Bale account hygiene.** The operator must register dedicated throwaway
   accounts for *both* roles — abnormal traffic looks abnormal and risks bans.
-- **Throughput.** The WebRTC/Meet carrier is built to beat the ~5–30 KB/s
-  chat ceiling; it is wired end-to-end but still beta, so expect rough edges
-  (reconnects, call-setup races).
+- **Throughput.** The transport is Meet-only — the old ~5–30 KB/s chat
+  carrier was removed in 0.4.2. The Meet/LiveKit carrier (data channel, or the
+  media-video packet carrier when Bale disables data) is much faster but still
+  beta, so expect rough edges (reconnects, call-setup races, retransmits on
+  the media-video path).
 - **Code-signing.** Windows binaries are unsigned, so SmartScreen will warn
   on first run.
 
