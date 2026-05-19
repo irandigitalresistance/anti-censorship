@@ -30,14 +30,25 @@ generates an **encrypted client config** — a `wtc1:…` blob that carries the
 client account's Bale session plus the server's address and pinned identity.
 The end user imports that single string into the client app; that's the entire
 "login". The client app loads the embedded Bale session, places a Bale **Meet
-call** to the server account, and the two accounts open a LiveKit/WebRTC data
-channel. The client opens a local **SOCKS5 proxy** on `127.0.0.1:1080`; when an
-app connects, the client wraps the target address into a framed packet,
-encrypts it (AEAD, with the server's identity pinned from the config), and
-sends it over the call's data channel. The server side reassembles and
+call** to the server account, and the two accounts join the call's
+LiveKit/WebRTC session.
+
+> **The platform blocked the data-channel path.** Bale's LiveKit deployment
+> disables WebRTC data-channel publishing on Meet calls (the LiveKit
+> participant permission `canPublishData=false`, or the data channel is
+> otherwise dropped). NovaNet 0.4.2 therefore **does not rely on the data
+> channel**: it carries tunnel packets over the **Meet media connection**
+> instead, by publishing a synthetic media (video) track whose frames are
+> just the tunnel's packets. This is **not** video steganography — nothing is
+> hidden inside a real picture; the media track *is* the packet carrier.
+
+The client opens a local **SOCKS5 proxy** on `127.0.0.1:1080`; when an app
+connects, the client wraps the target address into a framed packet, encrypts
+it (AEAD, with the server's identity pinned from the config), and sends it as
+payload on the Meet media connection. The server side reassembles and
 decrypts, opens a real TCP/UDP connection to the destination, and proxies bytes
 back the same way. To Bale (and anyone watching the network) it looks like two
-accounts on an ordinary voice call.
+accounts on an ordinary voice/video call.
 
 ```
    operator's machine, outside the firewall
@@ -57,7 +68,9 @@ accounts on an ordinary voice call.
                              │  Android)    │
                              └──────┬───────┘
                                     │ Bale Meet call →
-                                    ▼ LiveKit/WebRTC data channel
+                                    ▼ tunnel packets on the Meet
+                                    ▼ media connection (data channel
+                                    ▼ blocked by the platform)
                              ┌──────────────┐
                              │ Bale servers │ ← looks like a voice call
                              └──────┬───────┘  between two accounts
@@ -89,22 +102,31 @@ workspace defines six packages plus two app shells:
 
 ## Protocol, in layers
 
-1. **Carrier (Meet-only).** A bidirectional byte channel between the
-   operator's two Bale accounts, carried by a **Bale Meet call**. There is no
-   longer a chat-message carrier — the old `chat-transport` was removed in
+1. **Carrier (Meet media connection).** A bidirectional byte channel between
+   the operator's two Bale accounts, carried by a **Bale Meet call**. There is
+   no longer a chat-message carrier — the old `chat-transport` was removed in
    0.4.2, so all clients use the Meet path. The client app places a Meet call
    to the server account via Bale's `Meet/StartCall` RPC, the server's
    incoming-call watcher accepts it, and both join the same room on **Bale's
    own LiveKit SFU** (`wss://meet-*.ble.ir/rtc`, which is whitelisted inside
-   the region). Bytes ride a **LiveKit WebRTC data channel** when Bale grants
-   data publishing. When Bale's Meet permission allows media but disables data
-   packets (`canPublishData=false`), the tunnel transparently falls back to a
-   **media-video packet carrier**: it publishes a synthetic LiveKit video
-   track (`wt-media-packets`) and encodes tunnel packets into I420 video
-   frames with its own ACK/retransmit (`shared/src/bale/media-video-carrier.ts`
-   on Node, `MediaVideoTransport.kt` on Android). The carrier is wired
-   end-to-end in `server-electron`/`client-electron`/`client-android` but is
-   still beta.
+   the region).
+
+   **The data-channel transport is blocked by the platform.** Bale's LiveKit
+   deployment sets the participant permission `canPublishData=false` (or
+   otherwise refuses/drops data-channel publishing) on Meet calls, so a WebRTC
+   data channel cannot be used as the carrier. NovaNet 0.4.2 therefore sends
+   **tunnel packets over the Meet media connection instead**: it publishes a
+   synthetic LiveKit media (video) track (`wt-media-packets`) and uses each
+   frame as a packet container, with its own ACK/retransmit on top
+   (`shared/src/bale/media-video-carrier.ts` on Node,
+   `MediaVideoTransport.kt` on Android), wired end-to-end in
+   `server-electron`/`client-electron`/`client-android`. To be explicit: this
+   is **packet carriage over the media connection**, not video
+   steganography — the tunnel does not hide bytes inside a real camera
+   picture; the synthetic track's frame bytes simply *are* the packets. (The
+   code still prefers a data channel if the platform ever grants one, but in
+   practice the media path is what runs.) This path is still beta — expect
+   reconnects and retransmits.
 2. **Magic envelope.** Every payload begins with a 4-byte magic
    (`__WT_REQ__`, `__WT_OK__`, `__WT_FRAME__`, …) so the receiver can tell
    tunnel traffic apart from real chat messages and ignore the rest.
@@ -220,11 +242,13 @@ gets `nonce ‖ ciphertext ‖ tag`. They cannot:
 ### Wire format (Meet carrier)
 
 The data bytes never travel as chat text any more — they ride the Meet call's
-LiveKit transport (data channel, or the media-video track on the fallback
-path). On the wire to Bale's SFU each payload is just AEAD ciphertext: no
-headers, no recognisable protocol bytes inside. The framing the receiver
-parses lives *inside* that ciphertext (magic prefix + handshake/frame/mux), so
-Bale only ever sees opaque media/data packets on an ordinary-looking call.
+LiveKit media connection (the synthetic `wt-media-packets` track, because the
+platform blocks data-channel publishing). On the wire to Bale's SFU each
+payload is just AEAD ciphertext carried as media-track frame bytes: no
+headers, no recognisable protocol bytes inside, and nothing hidden inside a
+real picture. The framing the receiver parses lives *inside* that ciphertext
+(magic prefix + handshake/frame/mux), so Bale only ever sees opaque media
+packets on an ordinary-looking call.
 
 The only thing that still travels as a tiny **magic-prefixed message** is
 call setup: after `Meet/StartCall` the client signals the callee with
@@ -324,10 +348,11 @@ out-of-band; nothing in git contains a runnable binary.
 - **Bale account hygiene.** The operator must register dedicated throwaway
   accounts for *both* roles — abnormal traffic looks abnormal and risks bans.
 - **Throughput.** The transport is Meet-only — the old ~5–30 KB/s chat
-  carrier was removed in 0.4.2. The Meet/LiveKit carrier (data channel, or the
-  media-video packet carrier when Bale disables data) is much faster but still
-  beta, so expect rough edges (reconnects, call-setup races, retransmits on
-  the media-video path).
+  carrier was removed in 0.4.2. Because the platform blocks data-channel
+  publishing, packets ride the Meet media connection (the synthetic
+  `wt-media-packets` track); that is much faster than the old chat carrier
+  but still beta, so expect rough edges (reconnects, call-setup races,
+  packet retransmits on the media path).
 - **Code-signing.** Windows binaries are unsigned, so SmartScreen will warn
   on first run.
 
